@@ -2,27 +2,32 @@ library(shiny)
 library(tidyverse)
 library(ggplot2)
 
+
+# Helper: format the demand equation for ggplot annotation ----------------
+
 formatDemandEquation <- function(model, model_type, r_squared = NULL) {
   if (model_type == "Linear Demand") {
     intercept <- as.numeric(coef(model)[1])
     slope <- as.numeric(coef(model)[2])
-    r2 <- round(summary(model)$r.squared, 2)
+    r2 <- round(summary(model)$r.squared, 4)
     return(bquote(atop(Q == .(round(intercept, 2)) - .(abs(round(slope, 4))) * P, R^2 == .(r2))))
   } else if (model_type == "Exponential Demand") {
     intercept <- as.numeric(coef(model)[1])
     slope <- as.numeric(coef(model)[2])
-    r2 <- round(summary(model)$r.squared, 2)
+    r2 <- round(summary(model)$r.squared, 4)
     return(bquote(atop(Q == e^{.(round(intercept, 2)) - .(abs(round(slope, 4))) * P}, R^2 == .(r2))))
   } else if (model_type == "Sigmoid Demand") {
     asym <- as.numeric(coef(model)["Asym"])
     xmid <- as.numeric(coef(model)["xmid"])
     scal <- as.numeric(coef(model)["scal"])
-    pseudo_r2 <- if (!is.null(r_squared)) round(r_squared, 2) else NA
+    pseudo_r2 <- if (!is.null(r_squared)) round(r_squared, 4) else NA
     return(bquote(atop(Q == frac(.(round(asym, 4)), 1 + e^{frac(.(round(xmid, 4)) - P,  .(round(scal, 4)))}), R^2 == .(pseudo_r2))))
   }
 }
 
-# Define UI
+
+# Define the UI -----------------------------------------------------------
+
 ui <- fluidPage(
   titlePanel("Expected Customer Demand for Non-durable Products"),
   
@@ -55,36 +60,55 @@ ui <- fluidPage(
                  sliderInput("price", "Price", min = 0, max = 100, value = 50, step = 1)
                ),
                mainPanel(
-                 plotOutput("demand_plot"),
+                 tabsetPanel(
+                   tabPanel("Sample Demand",
+                            plotOutput("sample_demand_plot"),
+                            verbatimTextOutput("sample_interpretation"),
+                            verbatimTextOutput("sample_model_summary")
+                   ),
+                   tabPanel("Individual Demand",
+                            plotOutput("individual_demand_plot"),
+                            verbatimTextOutput("individual_interpretation"),
+                            verbatimTextOutput("individual_model_summary")
+                   )
+                 ),
+                 # UI: Add these components back to the main panel in the Customer Demand tab
                  tabsetPanel(
                    tabPanel("Interpretation",
-                            verbatimTextOutput("interpretation")),
-                   tabPanel("Summary",
-                            verbatimTextOutput("model_summary"))
+                            verbatimTextOutput("interpretation")
+                   ),
+                   tabPanel("Model Summary",
+                            verbatimTextOutput("model_summary")
+                   )
                  )
                )
-             )),
-    
-    tabPanel("Debug Transformed Data", verbatimTextOutput("debug_transformed"))
+             ))
   )
 )
 
-# Define Server
+
+# Define the server -------------------------------------------------------
+
 server <- function(input, output, session) {
-  # Reactive: Upload and read data
+
+
+# Reactive: Upload the data -----------------------------------------------
   userData <- reactive({
     req(input$file1)
     read.csv(input$file1$datapath, header = input$header, sep = input$sep) |> 
     relocate(where(is.numeric), .before = where(is.character))
   })
-  
+
+
+# Choose the price/quantity columns for pivot_longer ----------------------
   # Update column selection dynamically
   observeEvent(userData(), {
     updateSelectInput(session, "start_col", choices = names(userData()))
     updateSelectInput(session, "end_col", choices = names(userData()))
   })
-  
-  # Pivot the data
+
+
+# Pivot the data ----------------------------------------------------------
   transformedData <- reactive({
     req(userData(), input$start_col, input$end_col)
     
@@ -112,10 +136,35 @@ server <- function(input, output, session) {
       filter(!is.na(price) & !is.na(quantity))  # Remove rows with NA values
     
     # Update price slider range
-    updateSliderInput(session, "price", min = 0, max = max(tb$price, na.rm = TRUE), value = max(tb$price, na.rm = TRUE) / 5)
+    updateSliderInput(session, "price", 
+                      min = 0, 
+                      max = max(tb$price, na.rm = TRUE), 
+                      value = max(tb$price, na.rm = TRUE) / 5,
+                      step = max(tb$price, na.rm = TRUE) /25)
     return(tb)
   })
-  
+
+
+# Reactive: Sample demand dataset -----------------------------------------
+  sampleData <- reactive({
+    req(transformedData())
+    transformedData() |> 
+      group_by(price) |> 
+      summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop")
+  })
+
+
+# Reactive: Individual demand dataset -------------------------------------
+
+  individualData <- reactive({
+    req(transformedData())
+    transformedData() |> 
+      mutate(quantity = quantity + 0.001)  # Add small constant to avoid log(0) issues
+  })
+
+
+# Output:  Display uploaded data and summary statistics -------------------
+    
   # Output: Display uploaded data
   output$data_table <- DT::renderDT({
     req(userData())
@@ -143,130 +192,107 @@ server <- function(input, output, session) {
     })
     }
 
-  # Reactive: Fit selected demand model
-  demandModels <- reactive({
-    req(transformedData())
-    tb <- transformedData()
-    
-    # Debugging: Print the transformed data summary
-    print("Debugging demandModels: Transformed Data Summary")
-    print(summary(tb))
-    
-    # Validate that transformedData is not NULL and has sufficient data
-    if (is.null(tb) || nrow(tb) == 0 || any(is.na(tb$quantity))) {
-      print("Transformed data is NULL, empty, or contains NA in 'quantity'.")
-      return(NULL)
-    }
-    
-    # Debugging: Ensure price and quantity are numeric
-    print("Debugging demandModels: Data Types")
-    print(str(tb))
 
-    print("Debugging: Checking quantity column for NA/NaN/Inf values")
-    print(summary(tb$quantity))
-    print(any(is.na(tb$quantity)))
-    print(any(is.nan(tb$quantity)))
-    print(any(is.infinite(tb$quantity)))
-        
-    tryCatch({
-      # Fit models
-      lin_model <- lm(quantity ~ price, data = tb)
-      exp_model <- lm(log(quantity) ~ price, data = tb)
-      sig_model <- nls(quantity ~ SSlogis(price, Asym, xmid, scal), data = tb)
-      
-      # Debugging: Check if models were created
-      print("Linear Model Coefficients:")
-      print(coef(lin_model))
-      print("Exponential Model Coefficients:")
-      print(coef(exp_model))
-      print("Sigmoid Model Coefficients:")
-      print(coef(sig_model))
-      
-      # Calculate pseudo-R2 for sigmoid
-      y_observed <- tb$quantity
-      y_predicted <- predict(sig_model)
-      ss_residual <- sum((y_observed - y_predicted)^2)
-      ss_total <- sum((y_observed - mean(y_observed))^2)
-      pseudo_r2 <- 1 - (ss_residual / ss_total)
-      
-      # Create demand functions
-      fQ_lin <- function(P) coef(lin_model)[1] + coef(lin_model)[2] * P
-      fQ_exp <- function(P) exp(coef(exp_model)[1] + coef(exp_model)[2] * P)
-      fQ_sig <- function(P) {
-        coef(sig_model)[1] / (1 + exp((coef(sig_model)[2] - P) / coef(sig_model)[3]))
-      }
-      
-      # Return the selected model and function
-      return(list(
-        model = switch(input$model,
-                       "Linear Demand" = lin_model,
-                       "Exponential Demand" = exp_model,
-                       "Sigmoid Demand" = sig_model),
-        func = switch(input$model,
-                      "Linear Demand" = fQ_lin,
-                      "Exponential Demand" = fQ_exp,
-                      "Sigmoid Demand" = fQ_sig),
-        pseudo_r2 = if (input$model == "Sigmoid Demand") pseudo_r2 else NULL
-      ))
-    }, error = function(e) {
-      print("Error in demandModels:")
-      print(e)
-      return(NULL)
-    })
+# Reactive:  fit selected demand models -----------------------------------
+
+  # Reactive: Sample demand models
+  sampleDemandModels <- reactive({
+    req(sampleData())
+    tb <- sampleData()
+    fitDemandModels(tb)  # Use a helper function to fit models
   })
-
-  # Output: debug the demand models
-#  output$debug_demandModels <- renderPrint({
-#    req(demandModels())
-#    demandModels()
-#  })
   
-  # Output: Demand plot
-  output$demand_plot <- renderPlot({
-    req(transformedData(), demandModels(), input$price)
+  # Reactive: Individual demand models
+  individualDemandModels <- reactive({
+    req(individualData())
+    tb <- individualData()
+    fitDemandModels(tb)  # Use the same helper function to fit models
+  })
+  
+  # Helper function to fit models
+  fitDemandModels <- function(tb) {
+    lin_model <- lm(quantity ~ price, data = tb)
+    exp_model <- lm(log(quantity) ~ price, data = tb)
+    sig_model <- nls(quantity ~ SSlogis(price, Asym, xmid, scal), data = tb)
     
-    tb <- transformedData()
-    if (is.null(tb) || nrow(tb) == 0) {
-      return(NULL)  # Stop rendering if transformed data is invalid
-    }
+    y_observed <- tb$quantity
+    y_predicted <- predict(sig_model)
+    pseudo_r2 <- 1 - sum((y_observed - y_predicted)^2) / sum((y_observed - mean(y_observed))^2)
     
-    demand_function <- demandModels()$func
-    
-    # Evaluate demand at the chosen price
-    quantity_at_price <- demand_function(input$price)
+    list(
+      lin_model = lin_model,
+      exp_model = exp_model,
+      sig_model = sig_model,
+      pseudo_r2 = pseudo_r2
+    )
+  }
+  
 
-    # Generate the demand equation and R² as an expression
-#    demand_equation <- formatDemandEquation(demandModels()$model, input$model)
-    demand_equation <- formatDemandEquation(demandModels()$model, input$model, demandModels()$pseudo_r2)
+# Output: Demand plot -----------------------------------------------------
+
+  # Output: Sample demand plot
+  output$sample_demand_plot <- renderPlot({
+    req(sampleData(), sampleDemandModels(), input$price)
+    generateDemandPlot(sampleData(), sampleDemandModels(), input$model, input$price)
+  })
+  
+  # Output: Individual demand plot
+  output$individual_demand_plot <- renderPlot({
+    req(individualData(), individualDemandModels(), input$price)
+    generateDemandPlot(individualData(), individualDemandModels(), input$model, input$price)
+  })
+  
+  # Helper function to generate plots
+  generateDemandPlot <- function(data, models, model_type, price) {
+    model <- switch(model_type,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+
+    demand_function <- switch(model_type,
+                              "Linear Demand" = function(P) coef(model)[1] + coef(model)[2] * P,
+                              "Exponential Demand" = function(P) exp(coef(model)[1] + coef(model)[2] * P),
+                              "Sigmoid Demand" = function(P) coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3])))
+
+    quantity_at_price <- demand_function(price)
+    demand_equation <- formatDemandEquation(model, model_type, models$pseudo_r2)
+    ymax <- max(max(data$quantity, na.rm = TRUE), demand_function(0))    
     
-    
-    ggplot(tb, aes(x = price, y = quantity)) +
+    ggplot(data, aes(x = price, y = quantity)) +
+#      geom_function(fun = demand_function, color = "blue") +
       geom_function(fun = demand_function, color = "royalblue", linewidth = 2) +
       geom_point() +
+      
       annotate("segment", x = input$price, xend = input$price, y = 0, yend = quantity_at_price, linetype = "dashed", color = "royalblue") +
       annotate("segment", x = 0, xend = input$price, y = quantity_at_price, yend = quantity_at_price, linetype = "dashed", color = "royalblue") +
       annotate("point", x = input$price, y = quantity_at_price, color = "royalblue", fill = "white", shape = 21, size = 4) +
-      labs(title = paste(input$model, "Plot"), x = "Price", y = "Quantity") +
+
+      labs(title = paste(input$model, "Plot"), x = "Price", y = "Quantity") +      
+
       scale_x_continuous(labels = scales::dollar_format()) + 
-      scale_y_continuous(limits = c(0, max(tb$quantity, na.rm = TRUE)), labels = scales::comma) +
-      annotate("text", x = max(tb$price) * 0.95, y = max(tb$quantity) * 0.95,
+#      scale_y_continuous(limits = c(0, max(data$quantity, na.rm = TRUE)), labels = scales::comma) +
+      scale_y_continuous(limits = c(0, ymax), labels = scales::comma) +      
+
+      annotate("text", x = max(data$price) * 0.95, y = max(data$quantity) * 0.95,
                label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
                hjust = 1, vjust = 1, color = "royalblue", fontface = 2, size = 5) +
+      
       annotate("text",
-        x = max(tb$price) * 0.95,  # Place in the lower-right corner
-        y = max(tb$quantity) * 0.5, # Place in the lower-right corner
-        label = as.expression(demand_equation),
-        hjust = 1, vjust = 1, color = "black", fontface = 2, size = 7, parse = TRUE
-      )
-  })
-
+               x = max(data$price) * 0.05,  # Place in the lower-right corner
+               y = max(data$quantity) * 0.05, # Place in the lower-right corner
+               label = as.expression(demand_equation),
+               hjust = 0, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE
+               ) +
+      theme_minimal()
+  }
     
-  # Output: Interpretation
+# Output: Interpretation --------------------------------------------------
+
   output$interpretation <- renderText({
     req(demandModels())
     model <- demandModels()$model
     r_squared <- demandModels()$pseudo_r2
-    
+
     case_when(
       input$model == "Linear Demand" ~ {
         intercept <- coef(model)[1]
@@ -305,14 +331,17 @@ server <- function(input, output, session) {
       }
     )
   })
-  
-  # Output: Model summary
+
+# Output: Model summary ---------------------------------------------------
+
   output$model_summary <- renderPrint({
     req(demandModels())
     summary(demandModels()$model)
   })
 }
 
-# Run the app
+
+
+# Run the app -------------------------------------------------------------
 shinyApp(ui = ui, server = server)
 
