@@ -53,38 +53,43 @@ ui <- fluidPage(
     
     # Demand Visualization and Analysis Tab
     tabPanel("Customer Demand",
+             
              sidebarLayout(
                sidebarPanel(
                  selectInput("model", "Choose Demand Model",
                              choices = c("Linear Demand", "Exponential Demand", "Sigmoid Demand")),
+#                 selectInput("demand_level", "Choose Demand Level", choices = c("Individual Demand", "Sample Demand"), selected = "Sample Demand"),
                  sliderInput("price", "Price", min = 0, max = 100, value = 50, step = 1)
                ),
+
                mainPanel(
+                 
                  tabsetPanel(
+                   id = "demand_tab",  # Add an ID to track the active tab
                    tabPanel("Sample Demand",
                             plotOutput("sample_demand_plot"),
                             verbatimTextOutput("sample_interpretation"),
                             verbatimTextOutput("sample_model_summary")
-                   ),
+                            ),
                    tabPanel("Individual Demand",
                             plotOutput("individual_demand_plot"),
                             verbatimTextOutput("individual_interpretation"),
                             verbatimTextOutput("individual_model_summary")
-                   )
-                 ),
-                 # UI: Add these components back to the main panel in the Customer Demand tab
+                            )
+                   ),
+                 
                  tabsetPanel(
                    tabPanel("Interpretation",
                             verbatimTextOutput("interpretation")
-                   ),
+                            ),
                    tabPanel("Model Summary",
                             verbatimTextOutput("model_summary")
+                            )
                    )
                  )
-               )
-             ))
+               ))
+    )
   )
-)
 
 
 # Define the server -------------------------------------------------------
@@ -177,22 +182,6 @@ server <- function(input, output, session) {
     summary(userData())
   })
   
-  # Output: Debug the transformed data
-  if (Sys.getenv("SHINY_DEBUG") == "true") {
-    output$debug_transformed <- renderPrint({
-      req(transformedData())
-      print(summary(transformedData()))
-
-#    req(demandModels())
-#    demandModels()
-#    transformedData()$quantity    
-#    transformedData()$quantity        
-#    typeof(transformedData()$price)
-#    typeof(transformedData()$quantity)    
-    })
-    }
-
-
 # Reactive:  fit selected demand models -----------------------------------
 
   # Reactive: Sample demand models
@@ -226,7 +215,11 @@ server <- function(input, output, session) {
       pseudo_r2 = pseudo_r2
     )
   }
-  
+
+  output$debug_demandModels <- renderPrint({
+    req(demandModels())
+    str(demandModels())  # Check the structure of the object
+    })  
 
 # Output: Demand plot -----------------------------------------------------
 
@@ -275,13 +268,19 @@ server <- function(input, output, session) {
 
       annotate("text", x = max(data$price) * 0.95, y = max(data$quantity) * 0.95,
                label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
-               hjust = 1, vjust = 1, color = "royalblue", fontface = 2, size = 5) +
+               hjust = 1, vjust = 1, color = "royalblue", fontface = "bold", size = 5) +
+
+      # Add the background rectangle for the text
+      annotate("rect",
+               xmin = max(data$price) * 0.03, xmax = max(data$price) * 0.35,
+               ymin = max(data$quantity) * 0.02, ymax = max(data$quantity) * 0.35,
+               fill = "white", alpha = 0.8) +  # Semi-transparent white background
       
       annotate("text",
                x = max(data$price) * 0.05,  # Place in the lower-right corner
                y = max(data$quantity) * 0.05, # Place in the lower-right corner
                label = as.expression(demand_equation),
-               hjust = 0, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE
+               hjust = 0, vjust = 0, color = "red", fontface = 2, size = 7, parse = TRUE
                ) +
       theme_minimal()
   }
@@ -289,41 +288,63 @@ server <- function(input, output, session) {
 # Output: Interpretation --------------------------------------------------
 
   output$interpretation <- renderText({
-    req(demandModels())
-    model <- demandModels()$model
-    r_squared <- demandModels()$pseudo_r2
-
+    req(input$demand_tab)
+    
+    # Select models based on active tab
+    models <- if (input$demand_tab == "Sample Demand") {
+      sampleDemandModels()
+    } else if (input$demand_tab == "Individual Demand") {
+      individualDemandModels()
+    } else {
+      return("No model available for interpretation.")
+    }
+    
+    # Select the specific model based on user input
+    model <- switch(input$model,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+    
+    if (is.null(model)) {
+      return("No model available for interpretation.")
+    }
+    
+    # Generate interpretation text
     case_when(
       input$model == "Linear Demand" ~ {
         intercept <- coef(model)[1]
         slope <- coef(model)[2]
         paste0(
           "Linear Demand Interpretation:\n",
-          sprintf("R²: %.2f (%.2f%% of the variation in quantity is explained by price).\n", summary(model)$r.squared, summary(model)$r.squared * 100),
+          sprintf("R²: %.4f (%.2f%% of the variation in quantity is explained by price).\n",
+                  summary(model)$r.squared,
+                  summary(model)$r.squared * 100),
+#          sprintf("R²: %.2f (%.2f%% of the variation in quantity is explained by price).\n", round(summary(model)$r.squared, 4), summary(model)$r.squared * 100),
           sprintf("Intercept: If the price is $0, we expect to sell %.2f units.\n", intercept),
           sprintf("Slope: For every $1 increase in price, we lose %.2f units of quantity sold.\n", slope)
         )
       },
-      
       input$model == "Exponential Demand" ~ {
         intercept <- coef(model)[1]
         slope <- coef(model)[2]
-        percent_change <- abs((exp(slope) - 1) * 100)  # Convert to positive percentage
+        percent_change <- abs((exp(slope) - 1) * 100)
         paste0(
           "Exponential Demand Interpretation:\n",
-          sprintf("R²: %.2f (%.2f%% of the variation in log(quantity) is explained by price).\n", summary(model)$r.squared, summary(model)$r.squared * 100),
+          sprintf("R²: %.4f (%.2f%% of the variation in log(quantity) is explained by price).\n", 
+                  summary(model)$r.squared, 
+                  summary(model)$r.squared * 100),
           sprintf("Intercept: Base quantity is %.2f units when price is $0.\n", exp(intercept)),
           sprintf("Slope: For every $1 increase in price, sales drop by %.2f%%.\n", percent_change)
         )
       },
-      
       input$model == "Sigmoid Demand" ~ {
         asym <- coef(model)["Asym"]
         xmid <- coef(model)["xmid"]
         scal <- coef(model)["scal"]
+        pseudo_r2 <- models$pseudo_r2
         paste0(
           "Sigmoid Demand Interpretation:\n",
-          "Pseudo-R²: ", sprintf("%.2f", r_squared), " (", sprintf("%.2f%%", r_squared * 100), " of the variation in quantity is explained by price).\n",
+          "Pseudo-R²: ", sprintf("%.4f", pseudo_r2), " (", sprintf("%.2f%%", pseudo_r2 * 100), " of the variation in quantity is explained by price).\n",
           "Asymptote: Maximum quantity is ", sprintf("%.2f", asym), " units.\n",
           "Inflection Point: At a price of $", sprintf("%.2f", xmid), ", demand is most sensitive to price changes.\n",
           "Growth Rate: Demand decreases sharply over a price range of approximately ", sprintf("%.2f", abs(scal)), " units.\n"
@@ -331,17 +352,35 @@ server <- function(input, output, session) {
       }
     )
   })
-
 # Output: Model summary ---------------------------------------------------
 
   output$model_summary <- renderPrint({
-    req(demandModels())
-    summary(demandModels()$model)
+    req(input$demand_tab)
+    
+    # Select models based on active tab
+    models <- if (input$demand_tab == "Sample Demand") {
+      sampleDemandModels()
+    } else if (input$demand_tab == "Individual Demand") {
+      individualDemandModels()
+    } else {
+      return("No model available for summary.")
+    }
+    
+    # Select the specific model based on user input
+    model <- switch(input$model,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+    
+    if (!is.null(model)) {
+      summary(model)
+    } else {
+      cat("No model available for summary.")
+    }
   })
+
 }
-
-
-
+  
 # Run the app -------------------------------------------------------------
 shinyApp(ui = ui, server = server)
 

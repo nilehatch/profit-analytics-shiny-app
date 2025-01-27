@@ -1,0 +1,13 @@
+name: demand_for_non-durable_goods
+title: Demand for Non-durable Goods
+username: nwh24
+account: nwh24
+server: rconnect.byu.edu
+hostUrl: https://rconnect.byu.edu/__api__
+appId: 137
+bundleId: 1203
+url: https://rconnect.byu.edu/Demand4Non-durableGoods/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app jaden.R|app_demand_durable.R|app_demand_durable1.R|app.R|cinnamon_rolls.csv|cupcakes.csv|halo.csv|muscle_cola_all.csv|muscle_cola_ppppp.csv|muscle_cola_raw.csv|muscle_cola_wq.csv|README.md

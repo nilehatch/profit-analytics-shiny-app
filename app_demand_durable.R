@@ -22,7 +22,9 @@ formatDemandEquation <- function(model, model_type, r_squared = NULL) {
   }
 }
 
-# Define UI
+
+# Define the UI -----------------------------------------------------------
+
 ui <- fluidPage(
   titlePanel("Expected Customer Demand"),
   
@@ -66,7 +68,9 @@ ui <- fluidPage(
   )
 )
 
-# Define Server
+
+# Define the server -------------------------------------------------------
+
 server <- function(input, output, session) {
   # Reactive: Upload and read data
   userData <- reactive({
@@ -78,7 +82,10 @@ server <- function(input, output, session) {
   observeEvent(userData(), {
     updateSelectInput(session, "wtpCol", choices = names(userData()))
   })
-  
+
+
+# transform the data ------------------------------------------------------
+
   # Reactive: Transform data to compute quantity
   transformedData <- reactive({
     req(userData(), input$wtpCol)
@@ -94,7 +101,10 @@ server <- function(input, output, session) {
     updateSliderInput(session, "price", min = 0, max = max(tb_quantity$wtp, na.rm = TRUE), value = max(tb_quantity$wtp, na.rm = TRUE) / 5)
     return(tb_quantity)
   })
-  
+
+
+# Output: display data and summary statistics -----------------------------
+
   # Output: Display uploaded data
   output$data_table <- DT::renderDT({
     req(userData())
@@ -106,8 +116,10 @@ server <- function(input, output, session) {
     req(userData())
     summary(userData())
   })
-  
-  # Reactive: Fit selected demand model
+
+
+# Reactive: fit selected demand model -------------------------------------
+
   demandModels <- reactive({
     req(transformedData())
     tb_quantity <- transformedData()
@@ -144,8 +156,10 @@ server <- function(input, output, session) {
       pseudo_r2 = if (input$model == "Sigmoid Demand") pseudo_r2 else NULL
     )
   })
-  
-  # Output: Demand plot
+
+
+# Output: demand plot -----------------------------------------------------
+
   output$demand_plot <- renderPlot({
     req(transformedData(), demandModels(), input$price)
     tb_quantity <- transformedData()
@@ -171,16 +185,23 @@ server <- function(input, output, session) {
       annotate("text", x = max(tb_quantity$wtp) * 0.95, y = max(tb_quantity$quantity) * 0.95,
                label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
                hjust = 1, vjust = 1, color = "royalblue", fontface = 2, size = 5) +
+      # Add the background rectangle for the text
+#      annotate("rect",
+#               xmin = max(data$price) * 0.9, xmax = max(data$price) * 0.99,
+#               ymin = max(data$quantity) * 0.2, ymax = max(data$quantity) * 0.45,
+#               fill = "white", alpha = 0.8) +  # Semi-transparent white background
       annotate("text",
         x = max(tb_quantity$wtp) * 0.95,  # Place in the lower-right corner
         y = max(tb_quantity$quantity) * 0.5, # Place in the lower-right corner
         label = as.expression(demand_equation),
         hjust = 1, vjust = 1, color = "black", fontface = 2, size = 7, parse = TRUE
-      )
+      ) +
+      theme_minimal()
   })
 
-    
-  # Output: Interpretation
+
+# Output: interpretation --------------------------------------------------
+
   output$interpretation <- renderText({
     req(demandModels())
     model <- demandModels()$model
@@ -224,8 +245,10 @@ server <- function(input, output, session) {
       }
     )
   })
-  
-  # Output: Model summary
+
+
+# Output: model summary ---------------------------------------------------
+
   output$model_summary <- renderPrint({
     req(demandModels())
     summary(demandModels()$model)
