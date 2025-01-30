@@ -112,7 +112,12 @@ server <- function(input, output, session) {
     updateSelectInput(session, "end_col", choices = names(userData()))
   })
 
-
+  observeEvent(userData(), {
+    if (any(is.na(userData()))) {
+      showNotification("Warning: Dataset contains missing values. Rows with NA will be excluded.", type = "warning")
+    }
+  })
+  
 # Pivot the data ----------------------------------------------------------
   transformedData <- reactive({
     req(userData(), input$start_col, input$end_col)
@@ -262,26 +267,24 @@ server <- function(input, output, session) {
 
       labs(title = paste(input$model, "Plot"), x = "Price", y = "Quantity") +      
 
-      scale_x_continuous(labels = scales::dollar_format()) + 
-#      scale_y_continuous(limits = c(0, max(data$quantity, na.rm = TRUE)), labels = scales::comma) +
+      scale_x_continuous(limits = c(0, 1.5*max(data$price, na.rm = T)), labels = scales::dollar_format()) + 
       scale_y_continuous(limits = c(0, ymax), labels = scales::comma) +      
 
-      annotate("text", x = max(data$price) * 0.95, y = max(data$quantity) * 0.95,
+      annotate("text", 
+               x = max(data$price) * 1.4, # Place in the midlower-right corner
+               y = max(data$quantity) * 0.5,
                label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
                hjust = 1, vjust = 1, color = "royalblue", fontface = "bold", size = 5) +
 
       # Add the background rectangle for the text
-      annotate("rect",
-               xmin = max(data$price) * 0.03, xmax = max(data$price) * 0.35,
-               ymin = max(data$quantity) * 0.02, ymax = max(data$quantity) * 0.35,
-               fill = "white", alpha = 0.8) +  # Semi-transparent white background
+      #      annotate("rect",               xmin = max(data$price) * 0.03, xmax = max(data$price) * 0.35,               ymin = max(data$quantity) *0.02, ymax = max(data$quantity) * 0.35,               fill = "white", alpha = 0.8) +  # Semi-transparent white background
       
       annotate("text",
-               x = max(data$price) * 0.05,  # Place in the lower-right corner
-               y = max(data$quantity) * 0.05, # Place in the lower-right corner
+               x = max(data$price) * 1.4,  # Place in the upper-right corner
+               y = max(data$quantity) * 0.80, 
                label = as.expression(demand_equation),
-               hjust = 0, vjust = 0, color = "red", fontface = 2, size = 7, parse = TRUE
-               ) +
+               hjust = 1, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE) +
+      
       theme_minimal()
   }
     

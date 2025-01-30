@@ -5,9 +5,9 @@ account: nwh24
 server: rconnect.byu.edu
 hostUrl: https://rconnect.byu.edu/__api__
 appId: 136
-bundleId: 1201
+bundleId: 1205
 url: https://rconnect.byu.edu/Demand4DurableGoods/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: app jaden.R|app_demand_durable1.R|app.R|cinnamon_rolls.csv|cupcakes.csv|halo.csv|muscle_cola.csv|README.md
+ignoredFiles: 25+Donut+WTP+Q_January+27,+2025_10.16.csv|app jaden.R|app_demand_nondurable_PP.R|app_demand_nondurable_PQ.R|app.R|cinnamon_rolls.csv|cupcakes.csv|durable_debug.R|halo.csv|README.md

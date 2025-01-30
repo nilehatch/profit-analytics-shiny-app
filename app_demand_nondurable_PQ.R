@@ -6,209 +6,208 @@ formatDemandEquation <- function(model, model_type, r_squared = NULL) {
   if (model_type == "Linear Demand") {
     intercept <- as.numeric(coef(model)[1])
     slope <- as.numeric(coef(model)[2])
-    r2 <- round(summary(model)$r.squared, 2)
+    r2 <- round(summary(model)$r.squared, 4)
     return(bquote(atop(Q == .(round(intercept, 2)) - .(abs(round(slope, 4))) * P, R^2 == .(r2))))
   } else if (model_type == "Exponential Demand") {
     intercept <- as.numeric(coef(model)[1])
     slope <- as.numeric(coef(model)[2])
-    r2 <- round(summary(model)$r.squared, 2)
+    r2 <- round(summary(model)$r.squared, 4)
     return(bquote(atop(Q == e^{.(round(intercept, 2)) - .(abs(round(slope, 4))) * P}, R^2 == .(r2))))
   } else if (model_type == "Sigmoid Demand") {
     asym <- as.numeric(coef(model)["Asym"])
     xmid <- as.numeric(coef(model)["xmid"])
     scal <- as.numeric(coef(model)["scal"])
-    pseudo_r2 <- if (!is.null(r_squared)) round(r_squared, 2) else NA
+    pseudo_r2 <- if (!is.null(r_squared)) round(r_squared, 4) else NA
     return(bquote(atop(Q == frac(.(round(asym, 4)), 1 + e^{frac(.(round(xmid, 4)) - P,  .(round(scal, 4)))}), R^2 == .(pseudo_r2))))
   }
 }
 
-
-# Define the UI -----------------------------------------------------------
-
-# Define the UI modifications
+# UI
 ui <- fluidPage(
-  titlePanel("Expected Customer Demand (WTP + Quantity at Two Prices)"),
+  titlePanel("Customer Demand Estimation of Non-durable Goods (quantity at maximum willingness to pay)"),
   
   tabsetPanel(
-    # Data Tab
     tabPanel("Data",
              sidebarLayout(
                sidebarPanel(
                  fileInput("file1", "Upload CSV File", accept = c("text/csv", ".csv")),
                  checkboxInput("header", "Header", TRUE),
                  radioButtons("sep", "Separator", choices = c(Comma = ",", Semicolon = ";", Tab = "\t"), selected = ","),
-                 selectInput("wtpCol", "Select WTP Column", choices = NULL),
-                 selectInput("quantityCol", "Select Quantity Column", choices = NULL)
+                 sliderInput("fraction", "Fraction of WTP for second price:", min = 0.1, max = 0.9, value = 0.5, step = 0.05)
                ),
-               mainPanel(DT::DTOutput("data_table"), verbatimTextOutput("data_summary"))
+               mainPanel(
+                 DT::DTOutput("data_table"),
+                 verbatimTextOutput("data_summary")
+               )
              )),
     
-    # Demand Visualization and Analysis Tab
-    tabPanel("Customer Demand",
+    tabPanel("Demand Analysis",
              sidebarLayout(
                sidebarPanel(
                  selectInput("model", "Choose Demand Model", choices = c("Linear Demand", "Exponential Demand", "Sigmoid Demand")),
                  sliderInput("price", "Price", min = 0, max = 100, value = 50, step = 1)
                ),
-               mainPanel(plotOutput("demand_plot"), verbatimTextOutput("interpretation"), verbatimTextOutput("model_summary"))
+               mainPanel(
+                 plotOutput("demand_plot"),
+                 verbatimTextOutput("interpretation"),
+                 verbatimTextOutput("model_summary")
+               )
              ))
   )
 )
 
-
-# Define the server -------------------------------------------------------
-
-# Define the server with modifications for new case
+# Server
 server <- function(input, output, session) {
-  # Reactive: Upload and read data
+  
+  # Upload and read data
   userData <- reactive({
     req(input$file1)
     read.csv(input$file1$datapath, header = input$header, sep = input$sep)
   })
   
-  # Update WTP column choices dynamically
-  observeEvent(userData(), {
-    updateSelectInput(session, "wtpCol", choices = names(userData()))
-    updateSelectInput(session, "quantityCol", choices = names(userData()))
-  })
-  
-  
-# transform the data ------------------------------------------------------
-
+  # Transform data
   transformedData <- reactive({
-    req(userData(), input$wtpCol, input$quantityCol)
+    req(userData())
+    fraction <- input$fraction
     tb <- userData()
     
-    if (all(c("WTP_half", "Quantity_half") %in% names(tb))) {
-      # Case: WTP + Quantity at WTP and WTP/2 + Quantity at WTP/2
-      tb_transformed <- tb %>%
-        select(!!sym(input$wtpCol), !!sym(input$quantityCol), WTP_half, Quantity_half) %>%
-        rename(
-          WTP = !!sym(input$wtpCol),
-          Quantity = !!sym(input$quantityCol)
-        ) %>%
-        pivot_longer(cols = c(WTP, WTP_half), names_to = "Price_Type", values_to = "Price") %>%
-        pivot_longer(cols = c(Quantity, Quantity_half), names_to = "Quantity_Type", values_to = "Quantity") %>%
-        filter(!is.na(Price), !is.na(Quantity)) %>%
-        arrange(desc(Price)) %>%
-        group_by(Price) %>%
-        summarise(Quantity = sum(Quantity), .groups = "drop") %>%
-        mutate(Cumulative_Quantity = cumsum(Quantity))
-    } else {
-      # Case: Single WTP and Quantity
-      tb_transformed <- tb %>%
-        rename(
-          Price = !!sym(input$wtpCol),
-          Quantity = !!sym(input$quantityCol)
-        ) %>%
-        filter(!is.na(Price), !is.na(Quantity)) %>%
-        arrange(desc(Price)) %>%
-        group_by(Price) %>%
-        summarise(Quantity = sum(Quantity), .groups = "drop") %>%
-        mutate(Cumulative_Quantity = cumsum(Quantity))
+    # Ensure required columns are present
+    if (!all(c("wtp", "quantity", "quantity_at_fraction") %in% names(tb))) {
+      stop("The dataset must contain 'wtp', 'quantity', and 'quantity_at_fraction' columns.")
     }
     
-    # Update price slider dynamically
-    updateSliderInput(session, "price", min = 0, max = max(tb_transformed$Price, na.rm = TRUE), step = max(tb_transformed$Price) / 25)
+    # Add computed price at fraction
+    tb <- tb %>% mutate(price_at_fraction = wtp * fraction)
     
-    return(tb_transformed)
-  })  
-  # ... Remaining reactive and output logic stays similar but adapts to the new data
+    # Pivot `wtp` and `quantity` together
+    tb_long <- tb %>%
+      pivot_longer(
+        cols = c(wtp, price_at_fraction),
+        names_to = "price_type",
+        values_to = "price"
+      ) %>%
+      pivot_longer(
+        cols = c(quantity, quantity_at_fraction),
+        names_to = "quantity_type",
+        values_to = "quantity"
+      ) %>%
+      filter(
+        # Keep only aligned rows: wtp with quantity and price_at_fraction with quantity_at_fraction
+        (price_type == "wtp" & quantity_type == "quantity") |
+          (price_type == "price_at_fraction" & quantity_type == "quantity_at_fraction")
+      ) %>%
+      select(price, quantity) %>%
+      group_by(price) %>%
+      summarise(sum_quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
+      arrange(desc(price)) %>%
+      mutate(quantity = cumsum(sum_quantity))  # Apply cumulative sum
+    
+    # Update the slider dynamically
+    updateSliderInput(session, "price",
+                      min = 0,
+                      max = round(max(tb_long$price, na.rm = TRUE), 1),
+                      value = round(max(tb_long$price, na.rm = TRUE),1) / 5,
+                      step = round(max(tb_long$price, na.rm = TRUE),1) / 25)
+    
+    return(tb_long)
+  })
 
-
-# Output: display data and summary statistics -----------------------------
-
-  # Output: Display uploaded data
+  # Display uploaded data
   output$data_table <- DT::renderDT({
     req(userData())
     userData()
   })
   
-  # Output: Data summary
+  # Display data summary
   output$data_summary <- renderPrint({
     req(userData())
     summary(userData())
   })
-
-
-# Reactive: fit selected demand model -------------------------------------
-
+  
+  # Fit models
   demandModels <- reactive({
     req(transformedData())
-    tb_quantity <- transformedData()
+    tb <- transformedData()
     
-    # Fit models
-    lin_model <- lm(quantity ~ wtp, data = tb_quantity)
-    exp_model <- lm(log(quantity) ~ wtp, data = tb_quantity)
-    sig_model <- nls(quantity ~ SSlogis(wtp, Asym, xmid, scal), data = tb_quantity)
+    # Linear and exponential models
+    lin_model <- lm(quantity ~ price, data = tb)
+    exp_model <- lm(log(quantity) ~ price, data = tb)
     
-    # Calculate pseudo-R2 for sigmoid
-    y_observed <- tb_quantity$quantity
-    y_predicted <- predict(sig_model)
-    ss_residual <- sum((y_observed - y_predicted)^2)
-    ss_total <- sum((y_observed - mean(y_observed))^2)
-    pseudo_r2 <- 1 - (ss_residual / ss_total)
+    # Sigmoid model
+    sig_model <- tryCatch(
+      nls(quantity ~ SSlogis(price, Asym, xmid, scal), data = tb),
+      error = function(e) NULL
+    )
     
-    # Create demand functions
-    fQ_lin <- function(P) coef(lin_model)[1] + coef(lin_model)[2] * P
-    fQ_exp <- function(P) exp(coef(exp_model)[1] + coef(exp_model)[2] * P)
-    fQ_sig <- function(P) {
-      coef(sig_model)[1] / (1 + exp((coef(sig_model)[2] - P) / coef(sig_model)[3]))
-    }
+    # Pseudo R² for sigmoid
+    pseudo_r2 <- if (!is.null(sig_model)) {
+      y_obs <- tb$quantity
+      y_pred <- predict(sig_model)
+      1 - sum((y_obs - y_pred)^2) / sum((y_obs - mean(y_obs))^2)
+    } else NULL
     
-    # Return the selected model and function
     list(
-      model = switch(input$model,
-                     "Linear Demand" = lin_model,
-                     "Exponential Demand" = exp_model,
-                     "Sigmoid Demand" = sig_model),
-      func = switch(input$model,
-                    "Linear Demand" = fQ_lin,
-                    "Exponential Demand" = fQ_exp,
-                    "Sigmoid Demand" = fQ_sig),
-      pseudo_r2 = if (input$model == "Sigmoid Demand") pseudo_r2 else NULL
+      lin_model = lin_model,
+      exp_model = exp_model,
+      sig_model = sig_model,
+      pseudo_r2 = pseudo_r2
     )
   })
-
-
-# Output: demand plot -----------------------------------------------------
-
+  
+  # Plot demand
   output$demand_plot <- renderPlot({
     req(transformedData(), demandModels(), input$price)
-    tb_quantity <- transformedData()
-    demand_function <- demandModels()$func
+    tb <- transformedData()
+    models <- demandModels()
+    model_type <- input$model
     
-    # Evaluate demand at the chosen price
-    quantity_at_price <- demand_function(input$price)
+    # Select model and create demand function
+    model <- switch(model_type,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+    demand_func <- switch(model_type,
+                          "Linear Demand" = function(P) coef(model)[1] + coef(model)[2] * P,
+                          "Exponential Demand" = function(P) exp(coef(model)[1] + coef(model)[2] * P),
+                          "Sigmoid Demand" = if (!is.null(model)) {
+                            function(P) coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3]))
+                          } else NULL)
 
-    # Generate the demand equation and R² as an expression
-#    demand_equation <- formatDemandEquation(demandModels()$model, input$model)
-    demand_equation <- formatDemandEquation(demandModels()$model, input$model, demandModels()$pseudo_r2)
     
+    quantity_at_price <- demand_func(input$price)
+    demand_equation <- formatDemandEquation(model, model_type, models$pseudo_r2)
+    ymax <- max(max(tb$quantity, na.rm = TRUE), demand_func(0))    
     
-    ggplot(tb_quantity, aes(x = wtp, y = quantity)) +
-      geom_function(fun = demand_function, color = "royalblue", linewidth = 2) +
+    # Plot
+    ggplot(tb, aes(x = price, y = quantity)) +
+#      geom_point() +
+#      geom_function(fun = demand_func, color = "blue") +
+      geom_function(fun = demand_func, color = "royalblue", linewidth = 2) +
       geom_point() +
+      
       annotate("segment", x = input$price, xend = input$price, y = 0, yend = quantity_at_price, linetype = "dashed", color = "royalblue") +
       annotate("segment", x = 0, xend = input$price, y = quantity_at_price, yend = quantity_at_price, linetype = "dashed", color = "royalblue") +
       annotate("point", x = input$price, y = quantity_at_price, color = "royalblue", fill = "white", shape = 21, size = 4) +
-      labs(title = paste(input$model, "Plot"), x = "Price (WTP)", y = "Quantity") +
-      scale_x_continuous(labels = scales::dollar_format()) + 
-      scale_y_continuous(limits = c(0, max(tb_quantity$quantity, na.rm = TRUE)), labels = scales::comma) +
-      annotate("text", x = max(tb_quantity$wtp) * 0.95, y = max(tb_quantity$quantity) * 0.95,
+
+      labs(title = paste(model_type, "Demand"), x = "Price", y = "Quantity") +
+      
+      scale_x_continuous(limits = c(0, 1.5*max(tb$price, na.rm = T)), 
+                         labels = scales::dollar_format()) + 
+      scale_y_continuous(limits = c(0, ymax),
+                         labels = scales::comma) +   
+      
+      annotate("text", 
+               x = max(tb$price) * 1.4, # Place in the midlower-right corner
+               y = max(tb$quantity) * 0.5,
                label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
-               hjust = 1, vjust = 1, color = "royalblue", fontface = 2, size = 5) +
-      # Add the background rectangle for the text
-#      annotate("rect",
-#               xmin = max(data$price) * 0.9, xmax = max(data$price) * 0.99,
-#               ymin = max(data$quantity) * 0.2, ymax = max(data$quantity) * 0.45,
-#               fill = "white", alpha = 0.8) +  # Semi-transparent white background
+               hjust = 1, vjust = 1, color = "royalblue", fontface = "bold", size = 5) +
+      
       annotate("text",
-        x = max(tb_quantity$wtp) * 0.95,  # Place in the lower-right corner
-        y = max(tb_quantity$quantity) * 0.5, # Place in the lower-right corner
-        label = as.expression(demand_equation),
-        hjust = 1, vjust = 1, color = "black", fontface = 2, size = 7, parse = TRUE
-      ) +
+               x = max(tb$price) * 1.4,  # Place in the upper-right corner
+               y = max(tb$quantity) * 0.80, 
+               label = as.expression(demand_equation),
+               hjust = 1, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE) +
+      
       theme_minimal()
   })
 
@@ -216,55 +215,76 @@ server <- function(input, output, session) {
 # Output: interpretation --------------------------------------------------
 
   output$interpretation <- renderText({
-    req(demandModels())
-    model <- demandModels()$model
-    r_squared <- demandModels()$pseudo_r2
+    req(demandModels(), input$model)
     
-    case_when(
-      input$model == "Linear Demand" ~ {
-        intercept <- coef(model)[1]
-        slope <- coef(model)[2]
-        paste0(
-          "Linear Demand Interpretation:\n",
-          sprintf("R²: %.2f (%.2f%% of the variation in quantity is explained by price).\n", summary(model)$r.squared, summary(model)$r.squared * 100),
-          sprintf("Intercept: If the price is $0, we expect to sell %.2f units.\n", intercept),
-          sprintf("Slope: For every $1 increase in price, we lose %.2f units of quantity sold.\n", slope)
-        )
-      },
-      
-      input$model == "Exponential Demand" ~ {
-        intercept <- coef(model)[1]
-        slope <- coef(model)[2]
-        percent_change <- abs((exp(slope) - 1) * 100)  # Convert to positive percentage
-        paste0(
-          "Exponential Demand Interpretation:\n",
-          sprintf("R²: %.2f (%.2f%% of the variation in log(quantity) is explained by price).\n", summary(model)$r.squared, summary(model)$r.squared * 100),
-          sprintf("Intercept: Base quantity is %.2f units when price is $0.\n", exp(intercept)),
-          sprintf("Slope: For every $1 increase in price, sales drop by %.2f%%.\n", percent_change)
-        )
-      },
-      
-      input$model == "Sigmoid Demand" ~ {
-        asym <- coef(model)["Asym"]
-        xmid <- coef(model)["xmid"]
-        scal <- coef(model)["scal"]
-        paste0(
-          "Sigmoid Demand Interpretation:\n",
-          "Pseudo-R²: ", sprintf("%.2f", r_squared), " (", sprintf("%.2f%%", r_squared * 100), " of the variation in quantity is explained by price).\n",
-          "Asymptote: Maximum quantity is ", sprintf("%.2f", asym), " units.\n",
-          "Inflection Point: At a price of $", sprintf("%.2f", xmid), ", demand is most sensitive to price changes.\n",
-          "Growth Rate: Demand decreases sharply over a price range of approximately ", sprintf("%.2f", abs(scal)), " units.\n"
-        )
-      }
-    )
+    # Retrieve the models and selected model
+    models <- demandModels()
+    model_type <- input$model
+    
+    model <- switch(model_type,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+    
+    # Check if the model exists
+    if (is.null(model)) {
+      return("The selected demand model could not be fitted. Please try a different model.")
+    }
+    
+    # Interpret based on the model type
+    interpretation <- 
+      switch(model_type,
+             "Linear Demand" = {
+               intercept <- coef(model)[1]
+               slope <- coef(model)[2]
+               r_squared <- summary(model)$r.squared
+               paste0(
+                 "Linear Demand Interpretation:\n",
+                 sprintf("R²: %.4f (%.2f%% of the variation in quantity is explained by price).\n", r_squared, r_squared * 100),
+                 sprintf("Intercept: If the price is $0, we expect to sell %.2f units.\n", intercept),
+                 sprintf("Slope: For every $1 increase in price, we lose %.2f units of quantity sold.\n", slope)
+                 )
+               },
+             "Exponential Demand" = {
+               intercept <- coef(model)[1]
+               slope <- coef(model)[2]
+               r_squared <- summary(model)$r.squared
+               percent_change <- abs((exp(slope) - 1) * 100)
+               paste0(
+                 "Exponential Demand Interpretation:\n",
+                 sprintf("R²: %.4f (%.2f%% of the variation in log(quantity) is explained by price).\n", r_squared, r_squared * 100),
+                 sprintf("Intercept: Base quantity is %.2f units when price is $0.\n", exp(intercept)),
+                 sprintf("Slope: For every $1 increase in price, sales drop by %.2f%%.\n", percent_change)
+                 )
+               },
+             "Sigmoid Demand" = {
+               r_squared <- models$pseudo_r2
+               asym <- coef(model)["Asym"]
+               xmid <- coef(model)["xmid"]
+               scal <- coef(model)["scal"]
+               paste0(
+                 "Sigmoid Demand Interpretation:\n",
+                 sprintf("Pseudo-R²: %.4f (%.2f%% of the variation in quantity is explained by price).\n", r_squared, r_squared * 100),
+                 sprintf("Asymptote: Maximum quantity is %.2f units.\n", asym),
+                 sprintf("Inflection Point: At a price of $%.2f, demand is most sensitive to price changes.\n", xmid),
+                 sprintf("Growth Rate: Demand decreases sharply over a price range of approximately %.2f units.\n", abs(scal))
+                 )
+               },
+             "Unknown model type. Please check your selection."
+             )
+    
+    return(interpretation)
   })
-
-
-# Output: model summary ---------------------------------------------------
-
+  
+  
+  # Model summary
   output$model_summary <- renderPrint({
-    req(demandModels())
-    summary(demandModels()$model)
+    models <- demandModels()
+    model <- switch(input$model,
+                    "Linear Demand" = models$lin_model,
+                    "Exponential Demand" = models$exp_model,
+                    "Sigmoid Demand" = models$sig_model)
+    summary(model)
   })
 }
 
