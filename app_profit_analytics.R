@@ -56,6 +56,23 @@ formatDemandEquation <- function(model, model_type, r_squared = NULL) {
 
 ui <- fluidPage(
   
+  # ✅ Add CSS styles to fix the chosen demand model  and fixed/variable cost boxes
+  tags$head(
+    tags$style(HTML("
+      .chosen-model-box {
+        background-color: #F0F8FF !important; /* Match input box background */
+        border: 1px solid #ccc !important; /* Match input box border */
+        padding: 5px 10px !important; /* Adjust padding for a cleaner look */
+        border-radius: 4px !important; /* Rounded corners like input fields */
+        font-size: 14px !important; /* Match input font size */
+        height: 40px !important; /* Adjust height to match inputs */
+        display: flex;
+        align-items: center;
+        justify-content: left;
+      }
+    "))
+  ),
+  
   titlePanel("Profit Analytics for Entrepreneurs"),
 
 #  hr(),
@@ -115,7 +132,7 @@ ui <- fluidPage(
                          sidebarPanel(
                            selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
                            selectInput("quantityCol", "Select Quantity Column", choices = NULL),
-                           selectInput("quantityHalfCol", "Select Quantity at Fraction WTP Column", choices = NULL),
+                           selectInput("quantityFractionCol", "Select Quantity at Fraction WTP Column", choices = NULL),
                            sliderInput("fraction", "Fraction of WTP", min = 0, max = 1, value = 0.5, step = 0.1)
                          ),
                          mainPanel(
@@ -169,15 +186,15 @@ tabsetPanel(id = "cost_tabset",  # ✅ Wraps both cost panels
             tabPanel("Cost Structure",
                      sidebarLayout(
                        sidebarPanel(
-                         numericInput("fixed_cost", HTML("Fixed Cost (F<sub>1</sub>)"), value = 1000, min = 0, step = 50),
-                         numericInput("variable_cost", HTML("Variable Cost per Unit (VC<sub>1</sub>)"), value = 10, min = 0, step = 1),
+                         numericInput("fixed_cost", HTML("Fixed Cost (F<sub>1</sub>)"), value = 1000, min = 0, step = 1),
+                         numericInput("variable_cost", HTML("Variable Cost per Unit (VC<sub>1</sub>)"), value = 10, min = 0, step = 0.01),
                          
                          checkboxInput("toggle_cost_structure", "Compare Alternative Cost Structure", FALSE),
                          
                          conditionalPanel(
                            condition = "input.toggle_cost_structure == true",
-                           numericInput("fixed_cost2", HTML("Fixed Cost (F<sub>2</sub>)"), value = 2000, min = 0, step = 50),
-                           numericInput("variable_cost2", HTML("Variable Cost per Unit (VC<sub>2</sub>)"), value = 5, min = 0, step = 1)
+                           numericInput("fixed_cost2", HTML("Fixed Cost (F<sub>2</sub>)"), value = 2000, min = 0, step = 1),
+                           numericInput("variable_cost2", HTML("Variable Cost per Unit (VC<sub>2</sub>)"), value = 5, min = 0, step = 0.01)
                          )
                        ),
                        mainPanel(
@@ -195,10 +212,10 @@ tabsetPanel(id = "cost_tabset",  # ✅ Wraps both cost panels
             tabPanel("Cost as a Function of Price",
                      sidebarLayout(
                        sidebarPanel(
-                         textOutput("chosen_demand_model"),
-                         sliderInput("cost_price", "Select Price for Cost Analysis", min = 0, max = 100, value = 10, step = 1),
-                         numericInput("cost_price_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 10),
+                         uiOutput("chosen_demand_model_cost_ui"),  # ✅ Dynamically updated text output
+                         numericInput("cost_price_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 1),
                          numericInput("cost_price_variable_cost", "Variable Cost per Unit", value = 10, min = 0, step = 0.01),
+                         sliderInput("cost_price", "Select Price for Cost Analysis", min = 0, max = 100, value = 10, step = 1),
                        ),
                        mainPanel(
                          h4("Total Cost as a Function of Price"),
@@ -221,11 +238,10 @@ tabsetPanel(id = "profit_tabset",
             tabPanel("Profit Optimization",
                      sidebarLayout(
                        sidebarPanel(
-#                         selectInput("profit_model_type", "Choose Demand Model for Profit Analysis",                                     choices = c("Linear", "Exponential", "Sigmoid")),
-                         textOutput("chosen_demand_model"),
+                         uiOutput("chosen_demand_model_profit_ui"),  # ✅ Use dynamic UI rendering
+                         uiOutput("chosen_fixed_cost_ui"),  # ✅ Use dynamic UI rendering
+                         uiOutput("chosen_variable_cost_ui"),  # ✅ Use dynamic UI rendering
                          sliderInput("profit_price", "Select Price for Profit Analysis", min = 0, max = 100, value = 10, step = 1), 
-                         numericInput("profit_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 10),
-                         numericInput("profit_variable_cost", "Variable Cost per Unit", value = 10, min = 0, step = 0.01),
                        ),
                        mainPanel(
                          h4("Profit Maximization Curve"),
@@ -251,92 +267,63 @@ server <- function(input, output, session) {
   options(shiny.reactlog = TRUE) # enable visualizing dependencies - a quasi-reactive-graph
 
 
-# Synchronize price sliders -----------------------------------------------
-  # 🚀 Synchronize Price Sliders Across Modules with Debugging Logs
-  observeEvent(input$price, {
-    isolate({
-      cat("[DEBUG] Setting cost_price & profit_price from price:", input$price, "\n")
-      updateSliderInput(session, "cost_price", value = input$price)
-      updateSliderInput(session, "profit_price", value = input$price)
-    })
-  })
+# Initialize price_value -----------------------------------------------
   
-  observeEvent(input$cost_price, {
-    isolate({
-      updateSliderInput(session, "price", value = input$cost_price)
-      updateSliderInput(session, "profit_price", value = input$cost_price)
-    })
-  })
+  # 🚀 Reactive variable to track price globally
+  price_value <- reactiveVal(10)  # Start as NULL until first set
   
-  observeEvent(input$profit_price, {
-    isolate({
-      updateSliderInput(session, "price", value = input$profit_price)
-      updateSliderInput(session, "cost_price", value = input$profit_price)
-    })
-  })
-  
+
 
 
 # Synchronize fixed and variable cost numeric inputs ----------------------
 
   # ✅ Synchronize Fixed Cost Across Tabs
   observeEvent(input$fixed_cost, {
-    updateNumericInput(session, "fixed_cost", value = input$fixed_cost)
-    updateNumericInput(session, "cost_price_fixed_cost", value = input$fixed_cost)
-    updateNumericInput(session, "profit_fixed_cost", value = input$fixed_cost)
-    cat("[DEBUG] Fixed Cost updated:", input$fixed_cost, "\n")
-  })
+    isolate({
+      if (input$cost_price_fixed_cost != input$fixed_cost) {
+        updateNumericInput(session, "cost_price_fixed_cost", value = input$fixed_cost)
+        }
+      })
+    cat("[DEBUG] Fixed Cost updated to:", input$fixed_cost, "\n")
+    })
   
   observeEvent(input$cost_price_fixed_cost, {
-    updateNumericInput(session, "fixed_cost", value = input$cost_price_fixed_cost)
-    updateNumericInput(session, "profit_fixed_cost", value = input$cost_price_fixed_cost)
-    cat("[DEBUG] Fixed Cost updated via Cost Panel:", input$cost_price_fixed_cost, "\n")
-  })
+    isolate({
+      if (input$fixed_cost != input$cost_price_fixed_cost) {
+        updateNumericInput(session, "fixed_cost", value = input$cost_price_fixed_cost)
+        }
+      })
+    cat("[DEBUG] Fixed Cost updated via Cost-Price Panel:", input$cost_price_fixed_cost, "\n")
+    })
   
-  observeEvent(input$profit_fixed_cost, {
-    updateNumericInput(session, "fixed_cost", value = input$profit_fixed_cost)
-    updateNumericInput(session, "cost_price_fixed_cost", value = input$profit_fixed_cost)
-    cat("[DEBUG] Fixed Cost updated via Profit Panel:", input$profit_fixed_cost, "\n")
-  })
   
   
   # ✅ Synchronize Variable Cost Across Tabs
-  observeEvent(input$variable_cost, {
-    updateNumericInput(session, "variable_cost", value = input$variable_cost)
-    updateNumericInput(session, "cost_price_variable_cost", value = input$variable_cost)
-    updateNumericInput(session, "profit_variable_cost", value = input$variable_cost)
-    cat("[DEBUG] Variable Cost updated:", input$variable_cost, "\n")
+  observe({
+    req(input$variable_cost)  # Ensure input exists before using it
+    
+    # 🚀 If user deletes the value, set it to a safe default (e.g., 0.01)
+    safe_variable_cost <- suppressWarnings(as.numeric(input$variable_cost))  # Convert to numeric
+    
+    if (is.na(safe_variable_cost) || safe_variable_cost <= 0) {
+      cat("[WARNING] Invalid variable cost. Using fallback value: 0.01\n")
+      safe_variable_cost <- 0.01  # Set a small positive value to prevent division errors
+      updateNumericInput(session, "variable_cost", value = safe_variable_cost)
+    }
+    
+    cat("[DEBUG] Variable Cost updated to:", safe_variable_cost, "\n")
   })
   
   observeEvent(input$cost_price_variable_cost, {
-    updateNumericInput(session, "variable_cost", value = input$cost_price_variable_cost)
-    updateNumericInput(session, "profit_variable_cost", value = input$cost_price_variable_cost)
-    cat("[DEBUG] Variable Cost updated via Cost Panel:", input$cost_price_variable_cost, "\n")
+    isolate({
+      if (input$variable_cost != input$cost_price_variable_cost) {
+        updateNumericInput(session, "variable_cost", value = input$cost_price_variable_cost)
+      }
+    })
+    cat("[DEBUG] Variable Cost updated via Cost-Price Panel:", input$cost_price_variable_cost, "\n")
   })
   
-  observeEvent(input$profit_variable_cost, {
-    updateNumericInput(session, "variable_cost", value = input$profit_variable_cost)
-    updateNumericInput(session, "cost_price_variable_cost", value = input$profit_variable_cost)
-    cat("[DEBUG] Variable Cost updated via Profit Panel:", input$profit_variable_cost, "\n")
-  })
-  
-  
-  # ✅ Synchronize Fixed Cost (F2) and Variable Cost (VC2) for Alternative Cost Structure
-  observeEvent(input$fixed_cost2, {
-    updateNumericInput(session, "fixed_cost2", value = input$fixed_cost2)
-    cat("[DEBUG] Fixed Cost 2 updated:", input$fixed_cost2, "\n")
-  })
-  
-  observeEvent(input$variable_cost2, {
-    updateNumericInput(session, "variable_cost2", value = input$variable_cost2)
-    cat("[DEBUG] Variable Cost 2 updated:", input$variable_cost2, "\n")
-  })
 
-  output$chosen_demand_model <- renderText({
-    req(input$model_type)
-    paste("Chosen Demand Model:", input$model_type)
-  })
-  
   userData <- reactive({
     req(input$file1)
     read.csv(input$file1$datapath, header = input$header, sep = input$sep)
@@ -350,7 +337,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "end_price", choices = names(userData()))
     updateSelectInput(session, "wtpCol_nondurable", choices = names(userData()))
     updateSelectInput(session, "quantityCol", choices = names(userData()))
-    updateSelectInput(session, "quantityHalfCol", choices = names(userData()))
+    updateSelectInput(session, "quantityFractionCol", choices = names(userData()))
   })
 
 # 🛠 Tabset 1: upload and transform data ---------------------------------    
@@ -403,25 +390,65 @@ server <- function(input, output, session) {
     datatable(durableData())
   })
   
-  # 2️⃣ Non-Durable Goods (Prices)
-  priceData <- reactive({
+  # 🚀 Debugging Observers: BEFORE priceData()
+  observe({
     req(userData(), input$start_price, input$end_price)
+    cat("[DEBUG] Selected start_price:", input$start_price, "\n")
+    cat("[DEBUG] Selected end_price:", input$end_price, "\n")
     
     start_index <- which(names(userData()) == input$start_price)
     end_index <- which(names(userData()) == input$end_price)
     
+    if (length(start_index) == 0 || length(end_index) == 0) {
+      cat("[ERROR] start_index or end_index is not valid!\n")
+    } else {
+      cat("[DEBUG] start_index:", start_index, "end_index:", end_index, "\n")
+    }
+  })
+  
+  # 🚀 Reactive Function: priceData()
+  priceData <- reactive({
+    req(userData())  # Ensure data is available
+    
+    # 🚀 Ensure selections are made before proceeding
+    if (is.null(input$start_price) || input$start_price == "" ||
+        is.null(input$end_price) || input$end_price == "") {
+      cat("[DEBUG] Waiting for user to select both start and end price columns.\n")
+      return(NULL)  # ⛔ Prevents execution until selections exist
+    }
+    
+    start_index <- which(names(userData()) == input$start_price)
+    end_index <- which(names(userData()) == input$end_price)
+    
+    # 🚀 Check that valid numeric columns are selected
+    if (length(start_index) == 0 || length(end_index) == 0 || start_index > end_index) {
+      cat("[ERROR] Invalid start or end index. Check column selections.\n")
+      return(NULL)  # ⛔ Prevents errors before pivot_longer
+    }
+    
+    # ✅ Ensure that the selected columns are numeric before pivoting
+    selected_cols <- names(userData())[start_index:end_index]
+    numeric_cols <- selected_cols[sapply(userData()[selected_cols], is.numeric)]
+    
+    if (length(numeric_cols) == 0) {
+      cat("[ERROR] Selected price columns are not numeric. Waiting for valid selections.\n")
+      return(NULL)  # ⛔ Prevents execution if columns are not numeric
+    }
+    
+    cat("[DEBUG] Processing price data with selected numeric columns: ", paste(numeric_cols, collapse=", "), "\n")
+    
+    # ✅ Now safely transform the numeric price columns
     data <- userData() %>%
-      pivot_longer(cols = start_index:end_index, 
-                   names_to = "price", 
-                   values_to = "quantity") %>%
-      mutate(price = as.numeric(str_extract(price, "\\d+\\.?\\d*")),  
-             quantity = as.numeric(quantity)) %>%
+      select(all_of(numeric_cols)) %>%  # ✅ Only process numeric columns
+      pivot_longer(cols = everything(), names_to = "price", values_to = "quantity") %>%
+      filter(str_detect(price, "\\d+")) %>%  # ✅ Remove non-numeric price values
+      mutate(price = as.numeric(str_extract(price, "\\d+\\.?\\d*")),
+             quantity = as.numeric(quantity)) %>%  # ✅ Ensure quantity is numeric
       filter(!is.na(price), !is.na(quantity)) %>%
-      group_by(price) |> 
-      summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") |> 
+      group_by(price) %>%
+      summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
       relocate(c(price, quantity))
     
-#    cat("[DEBUG] Checking is.na() on priceData():", any(is.na(data)), "\n")  # ✅ Correct check
     return(data)
   })
   
@@ -432,24 +459,55 @@ server <- function(input, output, session) {
   
   # 3️⃣ Non-Durable Goods (WTP)
   wtpData <- reactive({
-    req(userData(), input$wtpCol_nondurable, input$quantityCol, input$quantityHalfCol)
+    req(userData())  # Ensure dataset is loaded
     
+    # Check if all necessary inputs are selected and not empty
+    if (is.null(input$wtpCol_nondurable) || input$wtpCol_nondurable == "" ||
+        is.null(input$quantityCol) || input$quantityCol == "" ||
+        is.null(input$quantityFractionCol) || input$quantityFractionCol == "") {
+      cat("[WARNING] Waiting for user to select all required columns...\n")
+      return(NULL)  # Prevent processing until all selections are made
+    }
+    
+    # Debugging: Print selected column names
+    cat("[DEBUG] Processing wtpData() with selected columns:\n")
+    cat("  - WTP Column:", input$wtpCol_nondurable, "\n")
+    cat("  - Quantity Column:", input$quantityCol, "\n")
+    cat("  - Fraction Quantity Column:", input$quantityFractionCol, "\n")
+    
+    # Ensure columns exist in dataset before using them
+    selected_columns <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
+    missing_columns <- selected_columns[!selected_columns %in% names(userData())]
+    
+    if (length(missing_columns) > 0) {
+      cat("[ERROR] The following selected columns do not exist in the dataset:", paste(missing_columns, collapse=", "), "\n")
+      return(NULL)
+    }
+    
+    # Ensure the selected columns contain valid data
+    for (col in selected_columns) {
+      if (!is.numeric(userData()[[col]])) {
+        cat("[ERROR] Selected column", col, "contains non-numeric data. Skipping processing...\n")
+        return(NULL)
+      }
+    }
+    
+    # Process the data
     data <- userData() %>%
       rename(wtp = !!sym(input$wtpCol_nondurable),
              q = !!sym(input$quantityCol),
-             q_half = !!sym(input$quantityHalfCol)) %>%  
-      filter(!is.na(wtp), !is.na(q), !is.na(q_half)) %>%
-      mutate(wtp_half = wtp * input$fraction) %>%
-      pivot_longer(cols = c(wtp, wtp_half), names_to = "price_type", values_to = "price") %>%
-      pivot_longer(cols = c(q, q_half), names_to = "quantity_type", values_to = "quantity") %>%
+             q_frac = !!sym(input$quantityFractionCol)) %>%
+      filter(!is.na(wtp), !is.na(q), !is.na(q_frac)) %>%
+      mutate(wtp_frac = wtp * input$fraction) %>%
+      pivot_longer(cols = c(wtp, wtp_frac), names_to = "price_type", values_to = "price") %>%
+      pivot_longer(cols = c(q, q_frac), names_to = "quantity_type", values_to = "quantity") %>%
       filter((price_type == "wtp" & quantity_type == "q") |
-               (price_type == "wtp_half" & quantity_type == "q_half")) %>%
+               (price_type == "wtp_frac" & quantity_type == "q_frac")) %>%
       group_by(price) %>%
       summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
       arrange(desc(price)) %>%
       mutate(quantity = cumsum(quantity))  
     
-#    cat("[DEBUG] Checking is.na() on wtpData():", any(is.na(data)), "\n")  # ✅ Correct check
     return(data)
   })
   
@@ -457,7 +515,9 @@ server <- function(input, output, session) {
     req(wtpData())
     datatable(wtpData())
   })
- 
+
+
+
 # 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
 
     respondentCount <- reactive({
@@ -499,7 +559,53 @@ server <- function(input, output, session) {
       return(data)
     })
   
+  # 🚀 Step 3: Set `price_value()` when `transformedData()` is ready
+  observeEvent(transformedData(), {
+    req(transformedData())  # Ensure data is available
+    
+    tb <- transformedData()
+    max_price <- max(tb$price, na.rm = TRUE)
+    
+    if (is.null(price_value()) || length(price_value()) == 0) {  
+      price_value(round(max_price, 2) / 5)
+      cat("[DEBUG] price_value() initialized to:", price_value(), "\n")  # 🔍 Debugging
+    }
+  })
   
+  observe({
+    req(input$price, input$cost_price, input$profit_price)  # ✅ Ensure sliders exist
+    
+    isolate({
+      new_value <- price_value()  # ✅ Default to current stored value
+      
+      if (input$price != price_value()) {
+        new_value <- input$price
+      } else if (input$cost_price != price_value()) {
+        new_value <- input$cost_price
+      } else if (input$profit_price != price_value()) {
+        new_value <- input$profit_price
+      }
+      
+      if (new_value != price_value()) {
+        price_value(new_value)  # ✅ Store updated value
+        cat("[DEBUG] price_value updated to:", new_value, "\n")  # 🔍 Debug print
+      }
+    })
+  })
+  
+  observe({
+    req(price_value())  # ✅ Ensure price_value() is set
+    
+    isolate({
+      updateSliderInput(session, "price", value = price_value())
+      updateSliderInput(session, "cost_price", value = price_value())
+      updateSliderInput(session, "profit_price", value = price_value())
+    })
+  })
+  
+  observe({
+    cat("[DEBUG] Cost Tab Current Selection:", input$cost_tabset, "\n")
+  })
   
 # 🛠 Tabset 2: Demand Model Estimation ------------------------------------    
 
@@ -525,12 +631,18 @@ server <- function(input, output, session) {
       }
     )
     
-    # ✅ Update price slider dynamically
+    # ✅ Only Set Default if Untouched
+    if (isolate(price_value()) == 10) {  
+      price_value(round(max(tb$price, na.rm = TRUE), 2) / 5)
+    }
+    
+    # ✅ Now Use price_value() to Update Sliders
     updateSliderInput(session, "price",
                       min = 0,
                       max = round(max(tb$price, na.rm = TRUE), 2),
-                      value = round(max(tb$price, na.rm = TRUE), 2) / 5,
-                      step = pmax(round(max(tb$price, na.rm = TRUE) / 100, 2), 0.01))  # ✅ Ensure minimum step
+                      value = price_value(),  # ✅ Use price_value() to maintain state
+                      step = pmax(round(max(tb$price, na.rm = TRUE) / 100, 2), 0.01))
+    
     
     pseudo_r2 <- if (!is.null(sig_model)) {
       y_obs <- tb$quantity
@@ -924,10 +1036,27 @@ server <- function(input, output, session) {
                        options = list(dom = 't', paging = FALSE, ordering = FALSE)))
     }
   })
+  
+  # ✅ Dynamically render the chosen demand model in the cost panel
+  output$chosen_demand_model_cost_ui <- renderUI({
+    req(input$model_type)
+    wellPanel(
+      h5("Chosen Demand Model"),
+      div(class = "chosen-model-box", input$model_type)  # ✅ Directly insert text instead of using textOutput()
+    )
+  })
+  
+  # ✅ Dynamically render the chosen demand model in the profit panel
+  output$chosen_demand_model_profit_ui <- renderUI({
+    req(input$model_type)
+    wellPanel(
+      h5("Chosen Demand Model"),
+      div(class = "chosen-model-box", input$model_type)  # ✅ Same fix as above
+    )
+  })
+  
 
 
-  
-  
 # 🛠 Tabset 3: Cost Structure ---------------------------------------------    
 
 
@@ -1035,30 +1164,70 @@ server <- function(input, output, session) {
     ))
   })
   
+  observe({
+    cat("[DEBUG] price_value() inside cost_tabset observer:", price_value(), "\n")
+    })
+  
+  observeEvent(input$cost_tabset, {
+    req(input$cost_tabset)  # ✅ Ensure cost_tabset exists
+    
+    cat("[DEBUG] Cost Tab Changed to:", input$cost_tabset, "\n")  # 🔍 Log tab selection
+    
+    # ✅ Only run if the tab is "Cost as a Function of Price"
+    if (input$cost_tabset == "Cost as a Function of Price") {
+      isolate({
+        req(price_value())  # ✅ Prevents crash if price_value() is NULL
+        req(input$cost_price)  # ✅ Prevents crash if cost_price is NULL
+        
+        # ✅ Now we are sure price_value() exists before accessing it
+        if (input$cost_price != price_value()) {
+          cat("[DEBUG] Updating cost_price slider to:", price_value(), "\n")
+          updateSliderInput(session, "cost_price", value = price_value())  
+        } else {
+          cat("[DEBUG] cost_price slider is already in sync.\n")
+        }
+      })
+    }
+  })
+  
+  observe({
+    cat("[DEBUG] Model Type Selected:", input$model_type, "\n")
+  })
+  
+  observeEvent(input$cost_price, {
+    isolate({
+      current_price <- price_value()
+      
+      # 🔍 Debugging: Check the value of price_value()
+      cat("[DEBUG] Current price_value():", current_price, "\n")
+      
+      # ✅ Fix: Ensure price_value() is initialized before checking
+      if (!is.null(current_price) && length(current_price) > 0 && input$cost_price != current_price) {  
+        price_value(input$cost_price)  # ✅ Store the changed value
+        cat("[DEBUG] price_value updated to:", input$cost_price, "\n")  # Debugging
+      }
+    })
+    
+    updateSliderInput(session, "cost_price",
+                      min = 0,
+                      max = round(cost_price_calculations()$max_price, 2),
+                      value = price_value(),  # ✅ Use updated value
+                      step = pmax(round(cost_price_calculations()$max_price / 100, 2), 0.01))
+  })
+  
+  
   output$cost_price_plot <- renderPlot({
     req(cost_price_calculations())
     
-    calc <- cost_price_calculations()  # ✅ Retrieve calculations
+    calc <- cost_price_calculations()  
     cost_func <- calc$cost_func
     demand_cost_func <- calc$demand_cost_func
     max_price <- calc$max_price
     scaling_factor <- calc$scaling_factor
     
-    # 🚀 Move updateSliderInput() here to avoid recursion inside reactive()
-    isolate({
-      if (input$cost_price != round(max_price, 2) / 5) {
-        updateSliderInput(session, "cost_price",
-                          min = 0,
-                          max = round(max_price, 2),
-                          value = round(max_price, 2) / 5,
-                          step = pmax(round(max_price / 100, 2), 0.01))
-      }
-    })
-    
     quantity_at_price <- scaling_factor * demand_cost_func(input$price)
     cost_at_price <- cost_func(input$price)
     
-    # ✅ Generate Plot
     ggplot() +
       geom_function(fun = cost_func, color = "tomato", linewidth = 2) +
       labs(title = paste("Cost as a Function of Price -", input$model_type),
@@ -1086,20 +1255,46 @@ server <- function(input, output, session) {
   })
   
 
+  
+  # ✅ Dynamically render the chosen fixed cost in the profit panel
+  output$chosen_fixed_cost_ui <- renderUI({
+    req(input$fixed_cost)
+    wellPanel(
+      h5("Specified Fixed Cost"),
+      div(class = "chosen-model-box", input$fixed_cost)
+    )
+  })
+  
+  
+  # ✅ Dynamically render the chosen variable cost in the profit panel
+  output$chosen_variable_cost_ui <- renderUI({
+    req(input$variable_cost)
+    wellPanel(
+      h5("Specified Variable Cost"),
+      div(class = "chosen-model-box", input$variable_cost)
+    )
+  })
+  
 # Tabset 4: Profit maximization -------------------------------------------
 
   observeEvent(transformedData(), {
-  tb <- transformedData()
-  max_price <- max(tb$price, na.rm = TRUE)
-
-  isolate({
-    updateSliderInput(session, "profit_price",
-                      min = 0,
-                      max = round(max_price, 2),
-                      value = round(max_price, 2) / 5,
-                      step = pmax(round(max_price / 100, 2), 0.01))
+    tb <- transformedData()
+    max_price <- max(tb$price, na.rm = TRUE)
+    
+    isolate({
+      if (input$profit_price != price_value()) {  # ✅ Prevent unnecessary updates
+        price_value(input$profit_price)  # ✅ Store the changed value
+      }
+      
+      updateSliderInput(session, "profit_price",
+                        min = 0,
+                        max = round(max_price, 2),
+                        value = price_value(),  # ✅ Keep the modified price_value()
+                        step = pmax(round(max_price / 100, 2), 0.01))
     })
   })
+  
+
   
   # 🚀 Define Profit Function & Optimize
   
@@ -1251,7 +1446,6 @@ server <- function(input, output, session) {
     cat("Total Cost: $", round(pc$optimal_cost, 2), "\n")
     cat("Maximum Profit: $", round(pc$optimal_profit, 2), "\n")
   })
-
 
 }
 

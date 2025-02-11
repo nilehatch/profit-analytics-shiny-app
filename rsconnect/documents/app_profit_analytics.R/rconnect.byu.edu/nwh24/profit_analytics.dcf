@@ -5,9 +5,9 @@ account: nwh24
 server: rconnect.byu.edu
 hostUrl: https://rconnect.byu.edu/__api__
 appId: 139
-bundleId: 1220
+bundleId: 1222
 url: https://rconnect.byu.edu/ProfitAnalytics/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
-ignoredFiles: 25+Donut+WTP+Q_January+27,+2025_10.16 (1).csv|25+Donut+WTP+Q_January+27,+2025_10.16.csv|app jaden.R|app_demand_durable.R|app_demand_nondurable_PP.R|app_demand_nondurable_PQ.R|app_profit_analytics_gt_summary.R|app.R|cinnamon_rolls.csv|cupcakes.csv|debug_durable.R|debug_nondurable_PP.R|debug_nondurable_WQ.R|debug_nonurable_wp_cumulative.xlsx|halo.csv|muscle_cola_all.csv|muscle_cola_ppppp.csv|muscle_cola_raw.csv|muscle_cola_wq.csv|muscle_cola_wqq.csv|old/app_demand_durable1.R|README.md
+ignoredFiles: 25+Donut+WTP+Q_January+27,+2025_10.16 (1).csv|25+Donut+WTP+Q_January+27,+2025_10.16.csv|app_demand_durable.R|app_demand_nondurable_PP.R|app_demand_nondurable_PQ.R|app_profit_analytics_gt_summary.R|cinnamon_rolls.csv|cupcakes.csv|halo.csv|muscle_cola_all.csv|muscle_cola_ppppp.csv|muscle_cola_raw.csv|muscle_cola_wq.csv|muscle_cola_wqq.csv|README.md|old
