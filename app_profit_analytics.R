@@ -22,14 +22,14 @@ formatDemandEquation <- function(model, model_type, r_squared = NULL) {
                        intercept <- as.numeric(coef(model)[1])
                        slope <- as.numeric(coef(model)[2])
                        r2 <- if (!is.null(r_squared) && !is.na(r_squared)) round(r_squared, 4) else "N/A"
-                       as.expression(bquote(atop(Q == .(round(intercept, 2)) - .(abs(round(slope, 4))) * P, 
+                       as.expression(bquote(atop(Q[Sample] == .(round(intercept, 2)) - .(abs(round(slope, 4))) * P, 
                                                  R^2 == .(r2))))
                      },
                      "Exponential" = {
                        intercept <- as.numeric(coef(model)[1])
                        slope <- as.numeric(coef(model)[2])
                        r2 <- if (!is.null(r_squared) && !is.na(r_squared)) round(r_squared, 4) else "N/A"
-                       as.expression(bquote(atop(Q == e^{.(round(intercept, 2)) - .(abs(round(slope, 4))) * P}, 
+                       as.expression(bquote(atop(Q[Sample] == e^{.(round(intercept, 2)) - .(abs(round(slope, 4))) * P}, 
                                                  R^2 == .(r2))))
                      },
                      "Sigmoid" = {
@@ -37,7 +37,7 @@ formatDemandEquation <- function(model, model_type, r_squared = NULL) {
                        xmid <- as.numeric(coef(model)["xmid"])
                        scal <- as.numeric(coef(model)["scal"])
                        pseudo_r2 <- if (!is.null(r_squared) && !is.na(r_squared)) round(r_squared, 4) else "N/A"
-                       as.expression(bquote(atop(Q == frac(.(round(asym, 4)), 1 + e^{frac(.(round(xmid, 4)) - P, .(round(scal, 4)))}), 
+                       as.expression(bquote(atop(Q[Sample] == frac(.(round(asym, 4)), 1 + e^{frac(.(round(xmid, 4)) - P, .(round(scal, 4)))}), 
                                                  R^2 == .(pseudo_r2))))
                      },
                      {
@@ -58,8 +58,11 @@ ui <- fluidPage(
   
   titlePanel("Profit Analytics for Entrepreneurs"),
 
-
+#  hr(),
+  tags$hr(style = "border-top: .5px solid #000;"),
+    
 # 🛠 Tabset 1: upload and transform data ----------------------------------
+  h3("Upload and Transform Customer Data", style = "margin-top: 25px;"),  # ✅ Title outside tabsetPanel
 
   tabsetPanel(id = "tabset_data",
               
@@ -113,7 +116,7 @@ ui <- fluidPage(
                            selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
                            selectInput("quantityCol", "Select Quantity Column", choices = NULL),
                            selectInput("quantityHalfCol", "Select Quantity at Fraction WTP Column", choices = NULL),
-                           sliderInput("fraction", "Fraction of WTP", min = 0.1, max = 1, value = 0.5, step = 0.1)
+                           sliderInput("fraction", "Fraction of WTP", min = 0, max = 1, value = 0.5, step = 0.1)
                          ),
                          mainPanel(
                            h4("Non-Durable (WTP): Transformed Data"),
@@ -124,86 +127,222 @@ ui <- fluidPage(
 
 
 
+##########################################
+
 # 🛠 Tabset 2: Sample Demand Estimation  ----------------------------------
+  tags$hr(style = "border-top: .5px solid #000;"),
+  h3("Estimate Customer Demand", style = "margin-top: 25px;"),  # ✅ Section Title
 
-#  tabsetPanel(id = "tabset_demand",
-              
-              # 📊 Demand Model Selection
-              # 📊 Demand Model Selection (with Sub-Tabs)
-#              tabPanel("Demand Estimation",
-#                       sidebarLayout(
-#                         sidebarPanel(
-#                           selectInput("model_type", "Choose Demand Model", 
-#                                       choices = c("Linear", "Exponential", "Sigmoid")),
-#                           sliderInput("price", "Select Price", min = 0, max = 100, value = 10, step = 1)
-#                         ),
-#                         mainPanel(
-#                           tabsetPanel(
-                             # 📌 Default Tab: Demand Plot
-#                             tabPanel("Demand Curve", plotOutput("demand_plot")),
-                             
-                             # 📈 Model Summary Tab
-#                             tabPanel("Model Summary", verbatimTextOutput("model_summary")),
-                             
-                             # 📊 Model Interpretation Tab
-#                             tabPanel("Model Interpretation", verbatimTextOutput("model_interpretation"))
-#                           )                       )                       )              )))
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("model_type", "Choose Demand Model", 
+                    choices = c("Linear", "Exponential", "Sigmoid")),
+        sliderInput("price", "Select Price", min = 0, max = 100, value = 10, step = 1),
+        numericInput("market_size", "Set Target Market Population", 
+                     value = 10000, min = 1, step = 100),
+        radioButtons("demand_view", "Choose Sample or Market Demand",
+                     choices = c("Sample Demand" = "sample", 
+                                 "Market Demand" = "market"),
+                     selected = "sample")
+        ),
+      mainPanel(
+        h4("Demand Curve"),
+        plotOutput("demand_plot"),
+        
+#        h4(""),
+        uiOutput("model_summary"), # ✅ Single UI Output to handle both Sample and Market Demand cases
 
-tabsetPanel(id = "tabset_demand",
+#        h4("Demand Model Interpretation", style = "margin-top: 25px;"),
+        DTOutput("model_interpretation")
+        )
+      ),
+
+########################################################
+
+# 🛠 Tabset 3: Cost Module ---------------------------------------
+tags$hr(style = "border-top: .5px solid #000;"),
+h3("Cost Analysis", style = "margin-top: 25px;"),  # ✅ Section Title
+
+tabsetPanel(id = "cost_tabset",  # ✅ Wraps both cost panels
             
-            # 📈 Sample Demand Estimation
-            tabPanel("Sample Demand",
+            # 📌 Tab 1: Cost Structure & C(Q)
+            tabPanel("Cost Structure",
                      sidebarLayout(
                        sidebarPanel(
-                         selectInput("model_type", "Choose Demand Model", 
-                                     choices = c("Linear", "Exponential", "Sigmoid")),
-                         sliderInput("price", "Select Price", min = 0, max = 100, value = 10, step = 1)
+                         numericInput("fixed_cost", HTML("Fixed Cost (F<sub>1</sub>)"), value = 1000, min = 0, step = 50),
+                         numericInput("variable_cost", HTML("Variable Cost per Unit (VC<sub>1</sub>)"), value = 10, min = 0, step = 1),
+                         
+                         checkboxInput("toggle_cost_structure", "Compare Alternative Cost Structure", FALSE),
+                         
+                         conditionalPanel(
+                           condition = "input.toggle_cost_structure == true",
+                           numericInput("fixed_cost2", HTML("Fixed Cost (F<sub>2</sub>)"), value = 2000, min = 0, step = 50),
+                           numericInput("variable_cost2", HTML("Variable Cost per Unit (VC<sub>2</sub>)"), value = 5, min = 0, step = 1)
+                         )
                        ),
                        mainPanel(
-                         h4("Sample Demand Curve"),
-                         plotOutput("sample_demand_plot"),
-                         h4("Model Summary"),
-                         verbatimTextOutput("sample_model_summary"),
-                         h4("Model Interpretation"),
-                         verbatimTextOutput("sample_model_interpretation")
+                         h4("Cost and Quantity"),
+                         plotOutput("cost_plot"),
+                         conditionalPanel(
+                           condition = "input.toggle_cost_structure == true",
+                           verbatimTextOutput("break_even_quantity")
+                         )
                        )
-                     )),
+                     )
+            ),
             
-            # 📈 Market Demand Scaling
-            tabPanel("Market Demand",
+            # 📌 Tab 2: Cost as a Function of Price
+            tabPanel("Cost as a Function of Price",
                      sidebarLayout(
                        sidebarPanel(
-                         numericInput("market_size", "Target Market Population", 
-                                      value = 10000, min = 1, step = 100),
-                         radioButtons("demand_view", "View Demand Data:",
-                                      choices = c("Sample Demand" = "sample", 
-                                                  "Market Demand" = "market"),
-                                      selected = "market")
+                         textOutput("chosen_demand_model"),
+                         sliderInput("cost_price", "Select Price for Cost Analysis", min = 0, max = 100, value = 10, step = 1),
+                         numericInput("cost_price_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 10),
+                         numericInput("cost_price_variable_cost", "Variable Cost per Unit", value = 10, min = 0, step = 0.01),
                        ),
                        mainPanel(
-                         h4("Market Demand Curve"),
-                         plotOutput("market_demand_plot"),
-                         h4("Market-Level Model Summary"),
-                         verbatimTextOutput("market_model_summary"),
-                         h4("Market-Level Model Interpretation"),
-                         verbatimTextOutput("market_model_interpretation")
+                         h4("Total Cost as a Function of Price"),
+                         plotOutput("cost_price_plot")#,
+                         )
                        )
-                     ))
+                     )
+            ),
+
+########################################################
+
+
+# 🛠 Tabset 4: Profit Maximization & Visualization
+tags$hr(style = "border-top: .5px solid #000;"),
+h3("Maximize Profits", style = "margin-top: 25px;"),
+
+tabsetPanel(id = "profit_tabset",
+            
+            # 📌 Profit Maximization
+            tabPanel("Profit Optimization",
+                     sidebarLayout(
+                       sidebarPanel(
+#                         selectInput("profit_model_type", "Choose Demand Model for Profit Analysis",                                     choices = c("Linear", "Exponential", "Sigmoid")),
+                         textOutput("chosen_demand_model"),
+                         sliderInput("profit_price", "Select Price for Profit Analysis", min = 0, max = 100, value = 10, step = 1), 
+                         numericInput("profit_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 10),
+                         numericInput("profit_variable_cost", "Variable Cost per Unit", value = 10, min = 0, step = 0.01),
+                       ),
+                       mainPanel(
+                         h4("Profit Maximization Curve"),
+                         plotOutput("profit_plot"),
+                         h4("Profit-Maximizing Price & Output"),
+                         verbatimTextOutput("optimal_profit_info")
+                       )
+                     )
+            )
 )
+
 )
+
+
+
 
 # -------------------------------------------------------------------------
 # Define the Server -------------------------------------------------------
 # -------------------------------------------------------------------------
 
 server <- function(input, output, session) {
+
+  options(shiny.reactlog = TRUE) # enable visualizing dependencies - a quasi-reactive-graph
+
+
+# Synchronize price sliders -----------------------------------------------
+  # 🚀 Synchronize Price Sliders Across Modules with Debugging Logs
+  observeEvent(input$price, {
+    isolate({
+      cat("[DEBUG] Setting cost_price & profit_price from price:", input$price, "\n")
+      updateSliderInput(session, "cost_price", value = input$price)
+      updateSliderInput(session, "profit_price", value = input$price)
+    })
+  })
   
-  # Load user data
+  observeEvent(input$cost_price, {
+    isolate({
+      updateSliderInput(session, "price", value = input$cost_price)
+      updateSliderInput(session, "profit_price", value = input$cost_price)
+    })
+  })
+  
+  observeEvent(input$profit_price, {
+    isolate({
+      updateSliderInput(session, "price", value = input$profit_price)
+      updateSliderInput(session, "cost_price", value = input$profit_price)
+    })
+  })
+  
+
+
+# Synchronize fixed and variable cost numeric inputs ----------------------
+
+  # ✅ Synchronize Fixed Cost Across Tabs
+  observeEvent(input$fixed_cost, {
+    updateNumericInput(session, "fixed_cost", value = input$fixed_cost)
+    updateNumericInput(session, "cost_price_fixed_cost", value = input$fixed_cost)
+    updateNumericInput(session, "profit_fixed_cost", value = input$fixed_cost)
+    cat("[DEBUG] Fixed Cost updated:", input$fixed_cost, "\n")
+  })
+  
+  observeEvent(input$cost_price_fixed_cost, {
+    updateNumericInput(session, "fixed_cost", value = input$cost_price_fixed_cost)
+    updateNumericInput(session, "profit_fixed_cost", value = input$cost_price_fixed_cost)
+    cat("[DEBUG] Fixed Cost updated via Cost Panel:", input$cost_price_fixed_cost, "\n")
+  })
+  
+  observeEvent(input$profit_fixed_cost, {
+    updateNumericInput(session, "fixed_cost", value = input$profit_fixed_cost)
+    updateNumericInput(session, "cost_price_fixed_cost", value = input$profit_fixed_cost)
+    cat("[DEBUG] Fixed Cost updated via Profit Panel:", input$profit_fixed_cost, "\n")
+  })
+  
+  
+  # ✅ Synchronize Variable Cost Across Tabs
+  observeEvent(input$variable_cost, {
+    updateNumericInput(session, "variable_cost", value = input$variable_cost)
+    updateNumericInput(session, "cost_price_variable_cost", value = input$variable_cost)
+    updateNumericInput(session, "profit_variable_cost", value = input$variable_cost)
+    cat("[DEBUG] Variable Cost updated:", input$variable_cost, "\n")
+  })
+  
+  observeEvent(input$cost_price_variable_cost, {
+    updateNumericInput(session, "variable_cost", value = input$cost_price_variable_cost)
+    updateNumericInput(session, "profit_variable_cost", value = input$cost_price_variable_cost)
+    cat("[DEBUG] Variable Cost updated via Cost Panel:", input$cost_price_variable_cost, "\n")
+  })
+  
+  observeEvent(input$profit_variable_cost, {
+    updateNumericInput(session, "variable_cost", value = input$profit_variable_cost)
+    updateNumericInput(session, "cost_price_variable_cost", value = input$profit_variable_cost)
+    cat("[DEBUG] Variable Cost updated via Profit Panel:", input$profit_variable_cost, "\n")
+  })
+  
+  
+  # ✅ Synchronize Fixed Cost (F2) and Variable Cost (VC2) for Alternative Cost Structure
+  observeEvent(input$fixed_cost2, {
+    updateNumericInput(session, "fixed_cost2", value = input$fixed_cost2)
+    cat("[DEBUG] Fixed Cost 2 updated:", input$fixed_cost2, "\n")
+  })
+  
+  observeEvent(input$variable_cost2, {
+    updateNumericInput(session, "variable_cost2", value = input$variable_cost2)
+    cat("[DEBUG] Variable Cost 2 updated:", input$variable_cost2, "\n")
+  })
+
+  output$chosen_demand_model <- renderText({
+    req(input$model_type)
+    paste("Chosen Demand Model:", input$model_type)
+  })
+  
   userData <- reactive({
     req(input$file1)
     read.csv(input$file1$datapath, header = input$header, sep = input$sep)
   })
-  
+
+# Update column selection dynamically -------------------------------------
   # Dynamically update column selection
   observeEvent(userData(), {
     updateSelectInput(session, "wtpCol_durable", choices = names(userData()))
@@ -256,7 +395,6 @@ server <- function(input, output, session) {
       mutate(quantity = cumsum(count),
              price = wtp)
     
-#    cat("[DEBUG] Checking is.na() on durableData():", any(is.na(data)), "\n")  # ✅ Correct check
     return(data)
   })
   
@@ -320,6 +458,21 @@ server <- function(input, output, session) {
     datatable(wtpData())
   })
  
+# 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
+
+    respondentCount <- reactive({
+    req(input$file1, input$tabset_data)
+    
+    active_tab <- input$tabset_data
+    
+    count <- switch(active_tab,
+                    "Durable Goods" = sum(durableData()$count, na.rm = TRUE),
+                    "Non-Durable (Prices)" = nrow(userData() %>% filter(!is.na(input$start_price))),
+                    "Non-Durable (WTP)" = nrow(userData() %>% filter(!is.na(!!sym(input$wtpCol_nondurable)))),
+                    NULL)
+    
+    return(count)
+})
 
 # 🚀 Reactive: select transformed data from the correct scenario 🚀 -------
 
@@ -346,9 +499,11 @@ server <- function(input, output, session) {
       return(data)
     })
   
+  
+  
 # 🛠 Tabset 2: Demand Model Estimation ------------------------------------    
 
-# 🚀 Reactive: Fit Demand Models 🚀 ---------------------------------------
+# 🚀 Reactive: Sample Demand Models 🚀 ------------------------------------
 
   demandModel <- reactive({
     req(transformedData(), input$model_type)
@@ -397,15 +552,23 @@ server <- function(input, output, session) {
   })
   
 
-# 🚀 Reactive: Market Models 🚀 -------------------------------------------
+# 🚀 Reactive: Market Demand Models 🚀 ------------------------------------
+
   marketDemand <- reactive({
     req(demandModel(), input$market_size)
     model_list <- demandModel()
     model <- model_list$model
+    pseudo_r2 <- model_list$pseudo_r2  # ✅ Now retrieving pseudo_r2
     
     if (is.null(model)) return(NULL)  # Handle errors
     
-    scaling_factor <- input$market_size / max(transformedData()$quantity, na.rm = TRUE)
+    respondents <- respondentCount()  # ✅ Correct respondent count
+    
+    if (is.null(respondents) || respondents == 0) {
+      return(NULL)  # Prevent division by zero
+    }
+    
+    scaling_factor <- input$market_size / respondents
     
     # Compute Market Demand Function
     market_demand_func <- switch(
@@ -415,177 +578,680 @@ server <- function(input, output, session) {
       "Sigmoid" = function(P) scaling_factor * coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3]))
     )
     
-    return(list(model = model, func = market_demand_func, scaling_factor = scaling_factor))
+    return(list(model = model, func = market_demand_func, scaling_factor = scaling_factor, pseudo_r2 = pseudo_r2))
   })
+
   
   
 # 📌 Output: demand model PLOT 📌 -----------------------------------------
   
-  # 📌 Output: demand model PLOT
   output$demand_plot <- renderPlot({
-    req(transformedData(), demandModel(), input$price)
-    tb <- transformedData()
+    req(transformedData(), demandModel(), input$price, input$demand_view)
+    
+    tb <- transformedData()  # Get sample data
     model_list <- demandModel()
     model <- model_list$model
     pseudo_r2 <- model_list$pseudo_r2
     model_type <- input$model_type
+    demand_view <- input$demand_view
     
-    # Compute demand function
-    demand_func <- switch(model_type,
-                          "Linear" = function(P) coef(model)[1] + coef(model)[2] * P,
-                          "Exponential" = function(P) exp(coef(model)[1] + coef(model)[2] * P),
-                          "Sigmoid" = function(P) coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3])))
-    
-    quantity_at_price <- demand_func(input$price)
-    demand_equation <- formatDemandEquation(model, model_type, pseudo_r2)
-    ymax <- max(max(tb$quantity, na.rm = TRUE), demand_func(0))        
-    
-    # ✅ Debugging
-    print(demand_equation)
-    
-    # Plot
-    ggplot(tb, aes(x = price, y = quantity)) +
-      geom_function(fun = demand_func, color = "royalblue", linewidth = 2) +
-      geom_point() +
-      
-      # Dashed reference lines
-      annotate("segment", x = input$price, xend = input$price, y = 0, yend = quantity_at_price, 
-               linetype = "dashed", color = "royalblue") +
-      annotate("segment", x = 0, xend = input$price, y = quantity_at_price, yend = quantity_at_price, 
-               linetype = "dashed", color = "royalblue") +
-      annotate("point", x = input$price, y = quantity_at_price, color = "royalblue", shape = 21, fill = "white", size = 4) +
-      
-      # Demand equation annotation
-      annotate("text",
-               x = max(tb$price) * 1.4,
-               y = max(tb$quantity) * 0.80, 
-               label = demand_equation,
-               hjust = 1, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE) +
-      
-      # Price / Quantity annoation
-      annotate("text", 
-               x = max(tb$price) * 1.4, # Place in the midlower-right corner
-               y = max(tb$quantity) * 0.5,
-               label = paste0("Price: $", input$price, "\nQuantity: ", round(quantity_at_price, 2)),
-               hjust = 1, vjust = 1, color = "royalblue", fontface = "bold", size = 5) +
-      
-      # Labels and Formatting
-      labs(title = paste(model_type, "Demand Curve"), x = "Price", y = "Quantity") +
-
-      scale_x_continuous(limits = c(0, 1.5*max(tb$price, na.rm = T)), 
-                         labels = scales::dollar_format()) + 
-      scale_y_continuous(limits = c(0, ymax),
-                         labels = scales::comma) +   
-
-      theme_minimal()
-  })
-  
-
-# 📌 Output: MARKET demand model PLOT 📌 ----------------------------------
-  
-  output$market_demand_plot <- renderPlot({
-    req(marketDemand(), input$demand_view)
-    tb <- transformedData()
-    
+    # Market demand setup
     market_list <- marketDemand()
     market_func <- market_list$func
     scaling_factor <- market_list$scaling_factor
     
-    # Select appropriate demand function
-    demand_func <- if (input$demand_view == "sample") {
-      switch(input$model_type,
-             "Linear" = function(P) coef(market_list$model)[1] + coef(market_list$model)[2] * P,
-             "Exponential" = function(P) exp(coef(market_list$model)[1] + coef(market_list$model)[2] * P),
-             "Sigmoid" = function(P) coef(market_list$model)[1] / (1 + exp((coef(market_list$model)[2] - P) / coef(market_list$model)[3])))
-    } else {
-      market_func
+    # ✅ Ensure scaling factor is valid
+    if (is.null(scaling_factor) || is.na(scaling_factor) || scaling_factor <= 0) {
+      scaling_factor <- 1  # Default to 1 (no scaling) if invalid
     }
     
-    # Plot demand curve
-    ggplot(tb, aes(x = price, y = ifelse(input$demand_view == "sample",
-                                         quantity,
-                                         scaling_factor * quantity))) +
-      geom_function(fun = demand_func, color = ifelse(input$demand_view == "sample", 
-                                                      "blue", "red"), linewidth = 2) +
-      geom_point() +
-      labs(title = ifelse(input$demand_view == "sample", 
-                          "Sample Demand Curve", "Market Demand Curve"),
+    # ✅ Ensure quantity is correctly scaled for market demand
+    tb <- tb %>%
+      mutate(scaled_quantity = quantity * scaling_factor)
+    
+    # ✅ Debugging: Show first few rows before plotting
+#    cat("Sample Data (First 5 Rows Before Scaling):\n")
+#    print(head(tb, 5))
+    
+    # ✅ Choose appropriate demand function
+    demand_func <- if (demand_view == "sample") {
+      switch(model_type,
+             "Linear" = function(P) coef(model)[1] + coef(model)[2] * P,
+             "Exponential" = function(P) exp(coef(model)[1] + coef(model)[2] * P),
+             "Sigmoid" = function(P) coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3])))
+    } else {
+      market_func  # Use pre-scaled market demand function
+    }
+    
+    # ✅ Compute quantity at selected price
+    quantity_at_price <- demand_func(input$price)  
+    
+    # ✅ Ensure plot data uses correct quantity display
+    tb <- tb %>%
+      mutate(quantity_display = case_when(
+        demand_view == "market" ~ scaled_quantity,  
+        TRUE ~ quantity  # Sample demand uses original quantity
+      ))
+    
+    # ✅ Debugging: Show transformed data
+#    cat("Scaled Data (First 5 Rows for Market Demand):\n")
+#    print(head(tb, 5))
+    
+    # ✅ Determine the correct R² or pseudo R² value
+    r_squared <- if (model_type == "Sigmoid") {
+      pseudo_r2  # ✅ Use pseudo R² for Sigmoid
+    } else {
+      summary(model)$r.squared  # ✅ Use traditional R² for Linear & Exponential
+    }
+    
+    demand_equation <- if (demand_view == "sample") {
+      formatDemandEquation(model, model_type, r_squared)  # ✅ Now correctly assigns the right R² value
+    } else {
+      as.expression(bquote(Q[Market] == .(scaling_factor) %*% Q[Sample]))
+    }
+    
+    ymax <- max(max(tb$quantity_display, na.rm = TRUE), demand_func(0))
+    
+    
+    # ✅ Plot with Correct Scaling & Annotations
+    ggplot(tb, aes(x = price, y = quantity_display)) +
+
+      geom_function(fun = demand_func, 
+                    color = ifelse(demand_view == "sample", "steelblue1", "royalblue3"), 
+                    linewidth = ifelse(demand_view == "sample", 2, 3)) +
+      geom_point() +  # ✅ Data points now correctly reflect sample/market
+      
+      # Reference lines and point at selected price
+      annotate("segment", x = input$price, xend = input$price, y = 0, yend = quantity_at_price, 
+               linetype = "dashed", color = ifelse(demand_view == "sample", "steelblue1", "royalblue3")) +
+      annotate("segment", x = 0, xend = input$price, y = quantity_at_price, yend = quantity_at_price, 
+               linetype = "dashed", color = ifelse(demand_view == "sample", "steelblue1", "royalblue3")) +
+      annotate("point", x = input$price, y = quantity_at_price, color = ifelse(demand_view == "sample", "steelblue1", "royalblue3"), 
+               shape = 21, fill = "white", size = 4) +
+      
+      # ✅ Demand equation annotation
+      annotate("text",
+               x = max(tb$price) * 1.4,
+               y = max(tb$quantity_display) * 0.80, 
+               label = demand_equation,
+               hjust = 1, vjust = 0, color = "black", fontface = 2, size = 7, parse = TRUE) +
+      
+      # ✅ Price / Quantity annotation
+      annotate("text", 
+               x = max(tb$price) * 1.4, 
+               y = max(tb$quantity_display) * 0.5,
+               label = paste0("Price: $", scales::comma(input$price, accuracy = 0.01), 
+                              "\nQuantity: ", scales::comma(round(quantity_at_price, 2))),
+               hjust = 1, vjust = 1, 
+               color = ifelse(demand_view == "sample", "steelblue1", "royalblue3"), 
+               fontface = "bold", size = 5) +
+      
+      # Labels and Formatting
+      labs(title = paste(ifelse(demand_view == "market", "Market-Scaled", "Sample"), model_type, "Demand Curve"),
            x = "Price", y = "Quantity") +
+      scale_x_continuous(limits = c(0, 1.5 * max(tb$price, na.rm = TRUE)), labels = scales::dollar_format()) + 
+      scale_y_continuous(limits = c(0, ymax), labels = scales::comma) +   
       theme_minimal()
   })
   
+  
 # 📌 Output: demand model SUMMARY 📌 --------------------------------------
 
-  output$model_summary <- renderPrint({
-    req(demandModel())  # Ensure model exists
+
+# Output: model_coefficients ----------------------------------------------
+
+  output$model_coefficients <- renderDT({
+    req(demandModel())  # Ensure a model exists
+    model_list <- demandModel()
+    model <- model_list$model
     
-    model_list <- demandModel()  # Extract the list
-    model <- model_list$model  # ✅ Extract actual model
+    if (is.null(model)) return(data.frame(Message = "Model fitting failed."))
+    
+    summary_df <- broom::tidy(model) |> 
+      dplyr::rename(
+        Variable = term,
+        Estimate = estimate,
+        "Standard Error" = std.error,
+        "t-Statistic" = statistic,
+        "p-Value" = p.value
+      )
+    
+    datatable(summary_df, 
+              escape = FALSE,
+              rownames = FALSE,
+              options = list(  #pageLength = 5, autoWidth = TRUE) 
+                dom = 't',
+                paging = FALSE,
+                searching = FALSE,
+                ordering = FALSE
+                )
+              ) %>%
+      formatRound(columns = c("Estimate", "Standard Error", "t-Statistic", "p-Value"), digits = 4)
+  })
+  
+
+# Output: model_fit_stats -------------------------------------------------
+
+  output$model_fit_stats <- renderDT({
+    req(demandModel(), input$demand_view)
+    model_list <- demandModel()
+    model <- model_list$model
+    pseudo_r2 <- model_list$pseudo_r2
     
     if (is.null(model)) {
-      return("Model fitting failed. Try a different model.")
+      return(NULL)
     }
     
-    summary(model)  # ✅ Apply summary() to the extracted model
+    if (input$model_type == "Sigmoid") {
+      model_summary <- summary(model)
+      rss <- sum(resid(model)^2)  # Residual Sum of Squares
+      df_residual <- model_summary$df[2]  # Residual Degrees of Freedom
+      
+      model_stats <- data.frame(
+        Statistic = c("Pseudo R²", "Residual Std. Error", "Residual Sum of Squares (RSS)", "Residual Degrees of Freedom"),
+        Value = c(
+          ifelse(!is.null(pseudo_r2), round(pseudo_r2, 4), "N/A"),
+          round(model_summary$sigma, 4),
+          round(rss, 4),
+          df_residual
+        )
+      )
+    } else {
+      model_summary <- summary(model)
+      
+      model_stats <- data.frame(
+        Statistic = c("R²", "F-statistic", "Residual Std. Error"),
+        Value = c(
+          round(model_summary$r.squared, 4),
+          round(model_summary$fstatistic[1], 4),
+          round(model_summary$sigma, 4)
+        )
+      )
+    }
+    
+    datatable(model_stats, 
+              escape = FALSE,
+              rownames = FALSE,
+              colnames = "",
+              options = list(
+                dom = 't',
+                paging = FALSE,
+                searching = FALSE,
+                ordering = FALSE,
+                autoWidth = FALSE
+                ))  # Simple table display
+  })
+  
+
+# Output: model_summary ---------------------------------------------------
+
+  output$model_summary <- renderUI({
+    req(demandModel(), input$demand_view)
+    
+    if (input$demand_view == "sample") {
+      tagList(
+        h4("Sample Demand Model"),
+        h5("Regression Summary"),        
+        DTOutput("model_coefficients"),  # ✅ Keep the regression table
+#        h4("Model Fit Statistics"),
+        DTOutput("model_fit_stats")  # ✅ Keep the model stats table
+      )
+    } else {
+      tagList(
+        h4("Market Demand Model"),
+        h5("Calculated from the Estimated Sample Demand Model"),        
+        DTOutput("market_demand_summary")  # ✅ New DT table for Market Demand summary
+      )
+    }
+  })
+  
+
+# Output: market_demand_summary -------------------------------------------
+
+  # ✅ Market Demand Summary (Formatted Text)
+  output$market_demand_summary <- renderDT({
+    summary_text <- "<b>Market Demand Summary:</b><br><ul>
+                     <li>The sample model has been applied to the full market size.</li>
+                     <li>While the functional form of the model remains unchanged, the quantities are scaled according to the market size.</li>
+                     <li>This scaling maintains the overall demand curve shape while projecting expected total demand at the market level.</li>
+                      <li>This projection provides an estimate of total demand at the market level.</li>  
+                   </ul>"
+    
+    summary_df <- data.frame("Market Demand Summary" = summary_text)
+    
+    datatable(summary_df, 
+              escape = FALSE,  # ✅ Allows ordered list formatting
+              rownames = FALSE, 
+              colnames = "",
+              options = list(
+                dom = 't',
+                paging = FALSE,
+                ordering = FALSE,
+                columnDefs = list(list(className = 'dt-left', targets = "_all"))
+              ))
   })
   
   
 # 📌 Output: demand model INTERPRETATION 📌 -------------------------------
 
-  output$model_interpretation <- renderPrint({
-    req(demandModel())  # Ensure model exists
-    
-    model_list <- demandModel()  # Extract list
-    model <- model_list$model  # ✅ Extract actual model
+  output$model_interpretation <- renderDT({
+    req(demandModel(), input$demand_view)
+    model_list <- demandModel()
+    model <- model_list$model
     
     if (is.null(model)) {
-      return("Model fitting failed. Try a different model.")
+      return(datatable(data.frame(Interpretation = "Model fitting failed. Try a different model."),
+                       escape = FALSE, rownames = FALSE, options = list(dom = 't', paging = FALSE, ordering = FALSE)))
     }
     
-    pseudo_r2 <- if (!is.null(model_list$pseudo_r2) && !is.na(model_list$pseudo_r2)) 
-      round(model_list$pseudo_r2, 4) else "N/A"  # ✅ Prevent errors
+    if (input$demand_view == "sample") {
+      pseudo_r2 <- if (!is.null(model_list$pseudo_r2) && !is.na(model_list$pseudo_r2)) 
+        round(model_list$pseudo_r2, 4) else "N/A"
+      
+      interpretation_text <- switch(
+        input$model_type,
+        "Linear" = {
+          intercept <- coef(model)[1]
+          slope <- coef(model)[2]
+          r2 <- round(summary(model)$r.squared, 4)
+          sprintf("<b>Linear Demand Interpretation:</b><br>
+               <ul>
+                 <li><b>R²:</b> %.2f (%.2f%% of variation in quantity is explained by price).</li>
+                 <li><b>Intercept:</b> If the price is $0, we expect to sell %.2f units.</li>
+                 <li><b>Slope:</b> For every $1 increase in price, we lose %.2f units of quantity sold.</li>
+               </ul>", r2, r2 * 100, intercept, slope)
+        },
+        "Exponential" = {
+          intercept <- coef(model)[1]
+          slope <- coef(model)[2]
+          r2 <- round(summary(model)$r.squared, 4)
+          percent_change <- abs((exp(slope) - 1) * 100)
+          sprintf("<b>Exponential Demand Interpretation:</b><br>
+               <ul>
+                 <li><b>R²:</b> %.2f (%.2f%% of variation in log(quantity) is explained by price).</li>
+                 <li><b>Intercept:</b> Base quantity is %.2f units when price is $0.</li>
+                 <li><b>Slope:</b> For every $1 increase in price, sales drop by %.2f%%.</li>
+               </ul>", r2, r2 * 100, exp(intercept), percent_change)
+        },
+        "Sigmoid" = {
+          asym <- coef(model)["Asym"]
+          xmid <- coef(model)["xmid"]
+          scal <- coef(model)["scal"]
+          sprintf("<b>Sigmoid Demand Interpretation:</b><br>
+               <ul>
+                 <li><b>Asymptote:</b> Maximum quantity is %.2f units.</li>
+                 <li><b>Inflection Point:</b> At price $%.2f, demand is most sensitive.</li>
+                 <li><b>Growth Rate:</b> Demand decreases sharply over a price range of approximately %.2f units.</li>
+                 <li><b>Pseudo R²:</b> %s (Measures model fit accuracy).</li>
+               </ul>", asym, xmid, abs(scal), pseudo_r2)
+        }
+      )
+      
+      # ✅ Convert into DT Table
+      interpretation_df <- data.frame(Interpretation = interpretation_text)
+      return(datatable(interpretation_df, 
+                       escape = FALSE, 
+                       rownames = FALSE,
+                       colnames = "",
+                       options = list(dom = 't', paging = FALSE, ordering = FALSE)))
+      
+    } else {  # ✅ Market Demand Interpretation (REVISED)
+      market_list <- marketDemand()
+      market_func <- market_list$func
+      scaling_factor <- market_list$scaling_factor
+      
+      # Calculate Market Demand at Selected Price
+      quantity_at_price <- round(market_func(input$price), 0)
+      quantity_at_zero <- round(market_func(0), 0)  # Max demand at P=0
+      quantity_change_per_dollar <- round(market_func(input$price) - market_func(input$price + 1), 0)
+      
+      market_interpretation_text <- sprintf("<b>Market Demand Interpretation:</b><br>
+                                         <ul>
+                                           <li>At price $%.2f, estimated market demand is <b>%s</b> units.</li>
+                                           <li>At $0, estimated total demand is <b>%s</b> units (maximum).</li>
+                                           <li>For every $1 increase in price, total market demand decreases by <b>%s</b> units.</li>
+                                         </ul>", 
+                                            input$price, scales::comma(quantity_at_price), 
+                                            scales::comma(quantity_at_zero), 
+                                            scales::comma(abs(quantity_change_per_dollar)))
+      
+      market_interpretation_df <- data.frame(Interpretation = market_interpretation_text)
+      
+      return(datatable(market_interpretation_df, 
+                       escape = FALSE, 
+                       rownames = FALSE,
+                       colnames = "", # hides the column header
+                       options = list(dom = 't', paging = FALSE, ordering = FALSE)))
+    }
+  })
+
+
+  
+  
+# 🛠 Tabset 3: Cost Structure ---------------------------------------------    
+
+
+# 📌 Cost Structure Plot --------------------------------------------------
+  output$cost_plot <- renderPlot({
+    req(input$fixed_cost, input$variable_cost)
     
-    interpretation <- switch(
-      input$model_type,
-      "Linear" = {
-        intercept <- coef(model)[1]
-        slope <- coef(model)[2]
-        r2 <- round(summary(model)$r.squared, 4)
-        c(
-          "Linear Demand Interpretation:",
-          sprintf("R²: %.2f (%.2f%% of variation in quantity is explained by price).", r2, r2 * 100),
-          sprintf("Intercept: If the price is $0, we expect to sell %.2f units.", intercept),
-          sprintf("Slope: For every $1 increase in price, we lose %.2f units of quantity sold.", slope)
-        )
-      },
-      "Exponential" = {
-        intercept <- coef(model)[1]
-        slope <- coef(model)[2]
-        r2 <- round(summary(model)$r.squared, 4)
-        percent_change <- abs((exp(slope) - 1) * 100)
-        c(
-          "Exponential Demand Interpretation:",
-          sprintf("R²: %.2f (%.2f%% of variation in log(quantity) is explained by price).", r2, r2 * 100),
-          sprintf("Intercept: Base quantity is %.2f units when price is $0.", exp(intercept)),
-          sprintf("Slope: For every $1 increase in price, sales drop by %.2f%%.", percent_change)
-        )
-      },
-      "Sigmoid" = {
-        asym <- coef(model)["Asym"]
-        xmid <- coef(model)["xmid"]
-        scal <- coef(model)["scal"]
-        c(
-          "Sigmoid Demand Interpretation:",
-          sprintf("Asymptote: Maximum quantity is %.2f units.", asym),
-          sprintf("Inflection Point: At price $%.2f, demand is most sensitive.", xmid),
-          sprintf("Growth Rate: Demand decreases sharply over a price range of approximately %.2f units.", abs(scal)),
-          sprintf("Pseudo R²: %s (Measures model fit accuracy)", pseudo_r2)
-        )
+    # Define Cost Functions
+    fC <- function(Q) input$variable_cost * Q + input$fixed_cost
+    fC2 <- function(Q) input$variable_cost2 * Q + input$fixed_cost2
+    
+    # Dynamically determine xmax
+    xmax <- if (input$toggle_cost_structure) {
+      2 * (input$fixed_cost2 - input$fixed_cost) / (input$variable_cost - input$variable_cost2)
+    } else {
+      1.5 * (input$fixed_cost / input$variable_cost)  # Default range
+    }
+    
+    # Initialize Plot with First Cost Function
+    plot <- ggplot() +
+      geom_function(fun = fC, color = "tomato", linewidth = 2) +
+      annotate("text", x = 0, y = 0.9 * input$fixed_cost, 
+               label = paste("Fixed Cost: $", scales::comma(input$fixed_cost)), 
+               hjust = -0.1, color = "black", fontface = "bold") +  # Fixed cost annotation
+      labs(title = "Cost vs. Quantity",
+           x = "Quantity",
+           y = "Total Cost") +
+      scale_x_continuous(limits = c(0, xmax)) +
+      scale_y_continuous(limits = c(0, fC(xmax)), labels = scales::dollar_format()) +
+      theme_minimal()
+    
+    # Handle Second Cost Function
+    if (input$toggle_cost_structure) {
+      req(input$fixed_cost2, input$variable_cost2)
+      
+      if (input$variable_cost == input$variable_cost2) {
+        # Prevent division by zero
+        plot <- plot +
+          annotate("text", x = xmax * 0.5, y = input$fixed_cost * 1.5, 
+                   label = "Cost structures have equal variable cost.\nNo switch point exists.",
+                   color = "red3", size = 5, fontface = "bold")
+      } else {
+        # Define and plot second cost function
+        plot <- plot + geom_function(fun = fC2, color = "red3", linewidth = 2)
+        
+        # Compute and annotate break-even quantity
+        switch_quantity <- (input$fixed_cost2 - input$fixed_cost) / 
+          (input$variable_cost - input$variable_cost2)
+        
+        if (switch_quantity > 0) {
+          plot <- plot +
+            annotate("text", x = switch_quantity * 1.05, y = fC(switch_quantity) * 0.1, 
+                     label = paste("Break-even Q:", round(switch_quantity, 2)),
+                     hjust = 0, color = "black", size = 5, fontface = "bold") +
+            
+            annotate("segment", x = switch_quantity, xend = switch_quantity, y = 0, yend = fC(switch_quantity),
+                     linetype = "dashed", color = "red3") +
+            annotate("point", x = switch_quantity, y = fC(switch_quantity), color = "tomato", 
+                     shape = 21, fill = "white", size = 4) 
+            
+        }
       }
+    }
+    
+    plot
+  })
+
+
+# 📌 Cost as a Function of Price ------------------------------------------
+ 
+
+# reactive: cost and demand function creation -----------------------------
+
+  cost_price_calculations <- reactive({
+    req(demandModel(), input$model_type, input$variable_cost, input$fixed_cost, marketDemand())
+    
+    tb <- transformedData()
+    max_price <- max(tb$price, na.rm = TRUE)
+    
+    model_list <- demandModel()
+    model <- model_list$model
+    model_type <- input$model_type
+    
+    market_list <- marketDemand()
+    scaling_factor <- market_list$scaling_factor
+    
+    # ✅ Define Demand Function Q(P) for Cost Calculation
+    demand_cost_func <- switch(
+      model_type,
+      "Linear" = function(P) max(0, coef(model)[1] + coef(model)[2] * P),
+      "Exponential" = function(P) max(0, exp(coef(model)[1] + coef(model)[2] * P)),
+      "Sigmoid" = function(P) max(0, coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3])))
     )
     
-    writeLines(interpretation)  # ✅ Properly formats new lines in Shiny
+    # ✅ Scale demand and cost to market size
+    demand_cost_func_scaled <- function(P) scaling_factor * demand_cost_func(P)
+    cost_func <- Vectorize(function(P) input$variable_cost * demand_cost_func_scaled(P) + input$fixed_cost)
+    
+    # ✅ Return all calculated values
+    return(list(
+      cost_func = cost_func,
+      demand_cost_func = demand_cost_func,
+      max_price = max_price,
+      scaling_factor = scaling_factor
+    ))
   })
+  
+  output$cost_price_plot <- renderPlot({
+    req(cost_price_calculations())
+    
+    calc <- cost_price_calculations()  # ✅ Retrieve calculations
+    cost_func <- calc$cost_func
+    demand_cost_func <- calc$demand_cost_func
+    max_price <- calc$max_price
+    scaling_factor <- calc$scaling_factor
+    
+    # 🚀 Move updateSliderInput() here to avoid recursion inside reactive()
+    isolate({
+      if (input$cost_price != round(max_price, 2) / 5) {
+        updateSliderInput(session, "cost_price",
+                          min = 0,
+                          max = round(max_price, 2),
+                          value = round(max_price, 2) / 5,
+                          step = pmax(round(max_price / 100, 2), 0.01))
+      }
+    })
+    
+    quantity_at_price <- scaling_factor * demand_cost_func(input$price)
+    cost_at_price <- cost_func(input$price)
+    
+    # ✅ Generate Plot
+    ggplot() +
+      geom_function(fun = cost_func, color = "tomato", linewidth = 2) +
+      labs(title = paste("Cost as a Function of Price -", input$model_type),
+           x = "Price", y = "Total Cost") +
+      annotate("segment", x = input$price, xend = input$price, 
+               y = 0, yend = cost_at_price,
+               linetype = "dashed", color = "tomato") +
+      annotate("segment", x = 0, xend = input$price, 
+               y = cost_at_price, yend = cost_at_price,
+               linetype = "dashed", color = "tomato") +
+      annotate("point", x = input$price, y = cost_at_price, 
+               color = "tomato2", 
+               shape = 21, fill = "white", size = 4) +
+      annotate("text", 
+               x = max_price * 0.80, 
+               y = cost_func(0) * 0.9,
+               label = paste0("Price: $", scales::comma(input$price, accuracy = 0.01), 
+                              "\nQuantity: ", scales::comma(round(quantity_at_price, 2)),
+                              "\nCost: $", scales::comma(round(cost_at_price, 2))),
+               hjust = 0, vjust = 1, 
+               color = "red3", fontface = "bold", size = 5) +
+      scale_x_continuous(limits = c(0, 1.05 * max_price), labels = scales::dollar_format()) +  
+      scale_y_continuous(limits = c(0, cost_func(0)), labels = scales::dollar_format()) +
+      theme_minimal()
+  })
+  
+
+# Tabset 4: Profit maximization -------------------------------------------
+
+  observeEvent(transformedData(), {
+  tb <- transformedData()
+  max_price <- max(tb$price, na.rm = TRUE)
+
+  isolate({
+    updateSliderInput(session, "profit_price",
+                      min = 0,
+                      max = round(max_price, 2),
+                      value = round(max_price, 2) / 5,
+                      step = pmax(round(max_price / 100, 2), 0.01))
+    })
+  })
+  
+  # 🚀 Define Profit Function & Optimize
+  
+  profitCalculations <- reactive({
+    req(demandModel(), marketDemand(), input$model_type, input$variable_cost, input$fixed_cost)
+    
+    tb <- transformedData()
+    max_price <- max(tb$price, na.rm = TRUE)
+    
+    model_list <- demandModel()
+    model <- model_list$model
+    model_type <- input$model_type
+    
+    market_list <- marketDemand()
+    scaling_factor <- market_list$scaling_factor
+    
+    # ✅ Define Demand Function Q(P)
+    demand_profit_func <- switch(
+      model_type,
+      "Linear" = function(P) max(0, scaling_factor * (coef(model)[1] + coef(model)[2] * P)),
+      "Exponential" = function(P) max(0, scaling_factor * exp(coef(model)[1] + coef(model)[2] * P)),
+      "Sigmoid" = function(P) max(0, scaling_factor * coef(model)[1] / (1 + exp((coef(model)[2] - P) / coef(model)[3])))
+    )
+    
+    # ✅ Define Revenue, Cost, and Profit Functions
+    revenue_func <- function(P) P * demand_profit_func(P)
+    cost_func <- function(P) input$variable_cost * demand_profit_func(P) + input$fixed_cost
+    profit_func <- function(P) revenue_func(P) - cost_func(P)
+    
+    # ✅ Optimize Profit - Find P* (Profit-Maximizing Price)
+    optim_result <- optim(par = max_price / 2, fn = function(P) -profit_func(P), method = "L-BFGS-B",
+                          lower = 0, upper = max_price)
+    
+    optimal_price <- optim_result$par
+    optimal_quantity <- demand_profit_func(optimal_price)
+    optimal_revenue <- revenue_func(optimal_price)
+    optimal_cost <- cost_func(optimal_price)
+    optimal_profit <- profit_func(optimal_price)
+    
+    revenue_optimize <- optimize(f = revenue_func, lower = 0, upper = max_price, maximum = TRUE)
+    max_revenue <- revenue_optimize[[2]]
+    
+    # 🛠 DEBUG PRINTS 🛠
+    cat("\n[DEBUG] Profit Calculation Inputs:\n")
+    cat("Model Type:", model_type, "\n")
+    cat("Fixed Cost:", input$fixed_cost, "\n")
+    cat("Variable Cost per Unit:", input$variable_cost, "\n")
+    cat("Max Price:", max_price, "\n")
+    cat("Optimal Price:", optimal_price, "\n")
+    
+    # 🛠 Print Demand Model Coefficients
+    cat("\n[DEBUG] Demand Model Coefficients:\n")
+    print(coef(model))
+    
+    # 🛠 Print function outputs at key price points
+    test_prices <- seq(0, max_price, length.out = 5)
+    cat("\n[DEBUG] Demand Function Output (Q at Key Prices):\n")
+    print(data.frame(Price = test_prices, Quantity = sapply(test_prices, demand_profit_func)))
+    
+    cat("\n[DEBUG] Revenue Function Output (R at Key Prices):\n")
+    print(data.frame(Price = test_prices, Revenue = sapply(test_prices, revenue_func)))
+    
+    cat("\n[DEBUG] Cost Function Output (C at Key Prices):\n")
+    print(data.frame(Price = test_prices, Cost = sapply(test_prices, cost_func)))
+    
+    cat("\n[DEBUG] Profit Function Output (π at Key Prices):\n")
+    print(data.frame(Price = test_prices, Profit = sapply(test_prices, profit_func)))
+    
+    return(list(
+      max_price = max_price,
+      max_revenue = max_revenue,
+      demand_profit_func = demand_profit_func,
+      revenue_func = revenue_func,
+      cost_func = cost_func,
+      profit_func = profit_func,
+      optimal_price = optimal_price,
+      optimal_quantity = optimal_quantity,
+      optimal_revenue = optimal_revenue,
+      optimal_cost = optimal_cost,
+      optimal_profit = optimal_profit
+    ))
+  })
+  
+  
+  output$profit_plot <- renderPlot({
+    req(profitCalculations())
+    
+    calculations <- profitCalculations()
+    
+    max_price <- calculations$max_price
+    max_revenue <- calculations$max_revenue
+    demand_profit_func <- calculations$demand_profit_func
+    revenue_func <- calculations$revenue_func
+    cost_func <- calculations$cost_func
+    profit_func <- calculations$profit_func
+    optimal_price <- calculations$optimal_price
+    optimal_profit <- calculations$optimal_profit
+    optimal_revenue <- calculations$optimal_revenue
+    optimal_quantity <- calculations$optimal_quantity
+    optimal_cost <- calculations$optimal_cost
+    
+    # ✅ Evaluate functions over a price range
+    price_seq <- seq(0, max_price, length.out = 100)
+    data <- data.frame(
+      Price = price_seq,
+      Revenue = sapply(price_seq, revenue_func),
+      Cost = sapply(price_seq, cost_func),
+      Profit = sapply(price_seq, profit_func)
+    )
+    
+    # 🛠 DEBUG PRINT 🛠 Check the first few rows
+    cat("\n[DEBUG] Evaluated Revenue, Cost, and Profit Data:\n")
+    print(head(data))
+    
+    # ✅ Generate Profit Plot
+    ggplot(data, aes(x = Price)) +
+      geom_line(aes(y = Revenue), color = "royalblue", linewidth = 2) +  # ✅ Explicitly plot evaluated function values
+      geom_line(aes(y = Cost), color = "tomato", linewidth = 2) +
+      geom_line(aes(y = Profit), color = "forestgreen", linewidth = 2) +
+      
+      # Annotate the Optimal Price
+      geom_vline(xintercept = optimal_price, linetype = "dashed", color = "black") +
+      annotate("point", x = optimal_price, y = optimal_profit, color = "black", shape = 21, fill = "white", size = 4) +
+      annotate("text", x = max_price * 1.0, y = max_revenue,
+               label = paste("P* = $", round(optimal_price, 2),
+                             "\nπ* = $", round(optimal_profit, 2),
+                             "\nQ* = ", round(optimal_quantity, 2),
+                             "\nR = $", round(optimal_revenue, 2),
+                             "\nC = $", round(optimal_cost, 2)
+                             ), 
+               hjust = 1, vjust = 1, size = 5, color = "black") +
+      
+      labs(title = "Optimal Profit, Revenue, and Cost",
+           x = "Price", y = "Profit, Revenue, and Cost") +
+      scale_x_continuous(limits = c(0, max_price * 1.05), labels = scales::dollar_format()) +
+      scale_y_continuous(limits = c(0, max_revenue * 1.05), labels = scales::dollar_format()) +
+      theme_minimal()
+  })
+  
+  output$optimal_profit_info <- renderPrint({
+    req(profitCalculations())
+    
+    pc <- profitCalculations()
+    
+    cat("\n🔹 **Profit Maximization Results** 🔹\n")
+    cat("Profit-Maximizing Price: $", round(pc$optimal_price, 2), "\n")
+    cat("Optimal Quantity Sold: ", round(pc$optimal_quantity, 2), " units\n")
+    cat("Total Revenue: $", round(pc$optimal_revenue, 2), "\n")
+    cat("Total Cost: $", round(pc$optimal_cost, 2), "\n")
+    cat("Maximum Profit: $", round(pc$optimal_profit, 2), "\n")
+  })
+
 
 }
 
