@@ -130,15 +130,9 @@ ui <- fluidPage(
               tabPanel("Non-Durable (WTP)",
                        sidebarLayout(
                          sidebarPanel(
-#                           selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
-#                           selectInput("quantityCol", "Select Quantity Column", choices = NULL),
-#                           selectInput("quantityFractionCol", "Select Quantity at Fraction WTP Column", choices = NULL),
-                           selectInput("wtpCol_nondurable", "Select WTP Column", 
-                                       choices = c("Please Select" = ""), selected = ""),
-                           selectInput("quantityCol", "Select Quantity Column", 
-                                       choices = c("Please Select" = ""), selected = ""),
-                           selectInput("quantityFractionCol", "Select Fraction Quantity Column", 
-                                       choices = c("Please Select" = ""), selected = ""),
+                           selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
+                           selectInput("quantityCol", "Select Quantity Column", choices = NULL),
+                           selectInput("quantityFractionCol", "Select Quantity at Fraction WTP Column", choices = NULL),
                            sliderInput("fraction", "Fraction of WTP", min = 0, max = 1, value = 0.5, step = 0.1)
                          ),
                          mainPanel(
@@ -463,43 +457,17 @@ server <- function(input, output, session) {
     datatable(priceData())
   })
   
-
-  
-    # 3️⃣ Non-Durable Goods (WTP)
-  
-  observeEvent(userData(), {
-    updateSelectInput(session, "wtpCol_nondurable", 
-                      choices = c("Please Select" = "", names(userData())))
-    updateSelectInput(session, "quantityCol", 
-                      choices = c("Please Select" = "", names(userData())))
-    updateSelectInput(session, "quantityFractionCol", 
-                      choices = c("Please Select" = "", names(userData())))
-  })
-  
+  # 3️⃣ Non-Durable Goods (WTP)
   wtpData <- reactive({
-    req(userData())  # Ensure data is loaded
+    req(userData())  # Ensure dataset is loaded
     
-    # 🚨 Stop execution if no valid selection has been made
-    if (input$wtpCol_nondurable == "" || input$quantityCol == "" || input$quantityFractionCol == "") {
+    # Check if all necessary inputs are selected and not empty
+    if (is.null(input$wtpCol_nondurable) || input$wtpCol_nondurable == "" ||
+        is.null(input$quantityCol) || input$quantityCol == "" ||
+        is.null(input$quantityFractionCol) || input$quantityFractionCol == "") {
       cat("[WARNING] Waiting for user to select all required columns...\n")
-      return(NULL)
+      return(NULL)  # Prevent processing until all selections are made
     }
-    
-    # Debugging: Print user selections
-    cat("[DEBUG] User-selected columns:\n")
-    cat("  - WTP Column:", input$wtpCol_nondurable, "\n")
-    cat("  - Quantity Column:", input$quantityCol, "\n")
-    cat("  - Fraction Quantity Column:", input$quantityFractionCol, "\n")
-    
-    # Ensure selected columns exist in dataset
-    selected_columns <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
-    missing_columns <- selected_columns[!selected_columns %in% names(userData())]
-    
-    if (length(missing_columns) > 0) {
-      cat("[ERROR] Selected columns do not exist in dataset:", paste(missing_columns, collapse=", "), "\n")
-      return(NULL)
-    }
-    
     
     # Debugging: Print selected column names
     cat("[DEBUG] Processing wtpData() with selected columns:\n")
@@ -507,62 +475,52 @@ server <- function(input, output, session) {
     cat("  - Quantity Column:", input$quantityCol, "\n")
     cat("  - Fraction Quantity Column:", input$quantityFractionCol, "\n")
     
-    # Rename and select columns safely
-    selected_data <- userData() %>%
-      select(all_of(selected_columns)) %>%
-      rename(
-        wtp_selected = !!sym(input$wtpCol_nondurable),
-        q_selected = !!sym(input$quantityCol),
-        q_frac_selected = !!sym(input$quantityFractionCol)
-      )
+    # Ensure columns exist in dataset before using them
+    selected_columns <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
+    missing_columns <- selected_columns[!selected_columns %in% names(userData())]
     
-    # Convert columns to numeric and handle NA coercion
-    selected_data <- selected_data %>%
-      mutate(
-        wtp_selected = as.numeric(wtp_selected),
-        q_selected = as.numeric(q_selected),
-        q_frac_selected = as.numeric(q_frac_selected)
-      )
-    
-    # Check for NA values after conversion
-    if (any(is.na(selected_data$wtp_selected)) || 
-        any(is.na(selected_data$q_selected)) || 
-        any(is.na(selected_data$q_frac_selected))) {
-      cat("[WARNING] NA values detected after numeric conversion.\n")
+    if (length(missing_columns) > 0) {
+      cat("[ERROR] The following selected columns do not exist in the dataset:", paste(missing_columns, collapse=", "), "\n")
+      return(NULL)
     }
     
-    # Remove NA values before further processing
-    selected_data <- selected_data %>%
-      filter(!is.na(wtp_selected), !is.na(q_selected), !is.na(q_frac_selected))
+    # Ensure the selected columns contain valid data
+    for (col in selected_columns) {
+      if (!is.numeric(userData()[[col]])) {
+        cat("[ERROR] Selected column", col, "contains non-numeric data. Skipping processing...\n")
+        return(NULL)
+      }
+    }
     
-    # Debugging: Print data before pivoting
-    cat("[DEBUG] Data before pivoting:\n")
-    print(head(selected_data))
-    
-    # Transform the data
-    data <- selected_data %>%
-      mutate(wtp_frac = wtp_selected * input$fraction) %>%
-      pivot_longer(cols = c(wtp_selected, wtp_frac), names_to = "price_type", values_to = "price") %>%
-      pivot_longer(cols = c(q_selected, q_frac_selected), names_to = "quantity_type", values_to = "quantity") %>%
-      filter((price_type == "wtp_selected" & quantity_type == "q_selected") |
-               (price_type == "wtp_frac" & quantity_type == "q_frac_selected")) %>%
+    # Process the data
+    data <- userData() %>%
+      rename(wtp = !!sym(input$wtpCol_nondurable),
+             q = !!sym(input$quantityCol),
+             q_frac = !!sym(input$quantityFractionCol)) %>%
+      filter(!is.na(wtp), !is.na(q), !is.na(q_frac)) %>%
+      mutate(wtp_frac = wtp * input$fraction) %>%
+      pivot_longer(cols = c(wtp, wtp_frac), names_to = "price_type", values_to = "price") %>%
+      pivot_longer(cols = c(q, q_frac), names_to = "quantity_type", values_to = "quantity") %>%
+      filter((price_type == "wtp" & quantity_type == "q") |
+               (price_type == "wtp_frac" & quantity_type == "q_frac")) %>%
       group_by(price) %>%
       summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
       arrange(desc(price)) %>%
-      mutate(quantity = cumsum(quantity))
+      mutate(quantity = cumsum(quantity))  
     
     return(data)
   })
   
   output$wtp_transformed <- renderDT({
-    req(wtpData())  # Ensure data exists before rendering
+    req(wtpData())
     datatable(wtpData())
   })
 
-  
-  # 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
-  
-  respondentCount <- reactive({
+
+
+# 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
+
+    respondentCount <- reactive({
     req(input$file1, input$tabset_data)
     
     active_tab <- input$tabset_data
@@ -574,8 +532,8 @@ server <- function(input, output, session) {
                     NULL)
     
     return(count)
-  })
-  
+})
+
 # 🚀 Reactive: select transformed data from the correct scenario 🚀 -------
 
     # 🔄 Reactive: Select transformed data from the correct scenario
