@@ -1,6 +1,8 @@
 library(shiny)
+library(shinyWidgets)
 library(tidyverse)
 library(DT)
+library(scales)
 
 
 # -------------------------------------------------------------------------
@@ -130,10 +132,18 @@ ui <- fluidPage(
               tabPanel("Non-Durable (WTP)",
                        sidebarLayout(
                          sidebarPanel(
-                           selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
-                           selectInput("quantityCol", "Select Quantity Column", choices = NULL),
-                           selectInput("quantityFractionCol", "Select Quantity at Fraction WTP Column", choices = NULL),
-                           sliderInput("fraction", "Fraction of WTP", min = 0, max = 1, value = 0.5, step = 0.1)
+#                           selectInput("wtpCol_nondurable", "Select WTP Column", choices = NULL),
+#                           selectInput("quantityCol", "Select Quantity Column", choices = NULL),
+#                           selectInput("quantityFractionCol", "Select Quantity at Fraction WTP Column", choices = NULL),
+                           selectInput("wtpCol_nondurable", "Select WTP Column", 
+                                       choices = c("Please Select" = ""), selected = ""),
+                           selectInput("quantityCol", "Select Quantity Column", 
+                                       choices = c("Please Select" = ""), selected = ""),
+                           selectInput("quantityFractionCol", "Select Column of Quantities when P = $0", 
+                                       choices = c("Please Select" = ""), selected = ""),
+                           selectInput("pEpsilonCol", "Select Column for Price at which Consumption Would Change", 
+                                       choices = c("Please Select" = ""), selected = ""),
+#                           sliderInput("fraction", "Fraction of WTP", min = 0, max = 1, value = 0.5, step = 0.1)
                          ),
                          mainPanel(
                            h4("Non-Durable (WTP): Transformed Data"),
@@ -154,7 +164,8 @@ ui <- fluidPage(
       sidebarPanel(
         selectInput("model_type", "Choose Demand Model", 
                     choices = c("Linear", "Exponential", "Sigmoid")),
-        sliderInput("price", "Select Price", min = 0, max = 100, value = 10, step = 1),
+#        sliderInput("price", "Select Price", min = 0, max = 100, value = 10, step = 1),
+        numericInput("price_input", "Enter Price:", value = 5, min = 0, step = 0.01),
         numericInput("market_size", "Set Target Market Population", 
                      value = 10000, min = 1, step = 100),
         radioButtons("demand_view", "Choose Sample or Market Demand",
@@ -215,7 +226,8 @@ tabsetPanel(id = "cost_tabset",  # ✅ Wraps both cost panels
                          uiOutput("chosen_demand_model_cost_ui"),  # ✅ Dynamically updated text output
                          numericInput("cost_price_fixed_cost", "Fixed Cost", value = 1000, min = 0, step = 1),
                          numericInput("cost_price_variable_cost", "Variable Cost per Unit", value = 10, min = 0, step = 0.01),
-                         sliderInput("cost_price", "Select Price for Cost Analysis", min = 0, max = 100, value = 10, step = 1),
+#                         sliderInput("cost_price", "Select Price for Cost Analysis", min = 0, max = 100, value = 10, step = 1),
+                         numericInput("price_input", "Enter Price for Cost:", value = 5, min = 0, step = 0.01)
                        ),
                        mainPanel(
                          h4("Total Cost as a Function of Price"),
@@ -241,13 +253,28 @@ tabsetPanel(id = "profit_tabset",
                          uiOutput("chosen_demand_model_profit_ui"),  # ✅ Use dynamic UI rendering
                          uiOutput("chosen_fixed_cost_ui"),  # ✅ Use dynamic UI rendering
                          uiOutput("chosen_variable_cost_ui"),  # ✅ Use dynamic UI rendering
-                         sliderInput("profit_price", "Select Price for Profit Analysis", min = 0, max = 100, value = 10, step = 1), 
+#                         sliderInput("profit_price", "Select Price for Profit Analysis", min = 0, max = 100, value = 10, step = 1), 
+                         numericInput("price_input", "Enter Price for Profit Analysis:", value = 5, min = 0, step = 0.01)
                        ),
                        mainPanel(
                          h4("Profit Maximization Curve"),
                          plotOutput("profit_plot"),
                          h4("Profit-Maximizing Price & Output"),
                          verbatimTextOutput("optimal_profit_info")
+                       )
+                     )
+            ),
+            
+            tabPanel("Break-Even Analysis",
+                     sidebarLayout(
+                       sidebarPanel(
+                         h4("Break-Even Analysis"),
+                         p("This plot shows the break-even quantity, where revenue equals cost."),
+                         p("At this point, the business covers its fixed and variable costs.")
+                       ),
+                       mainPanel(
+                         plotOutput("breakeven_plot"),
+                         verbatimTextOutput("breakeven_summary")
                        )
                      )
             )
@@ -267,6 +294,41 @@ server <- function(input, output, session) {
   options(shiny.reactlog = TRUE) # enable visualizing dependencies - a quasi-reactive-graph
 
 
+
+# Check return warnings if durable WTP variable is not numeric ------------
+
+  observeEvent(input$wtpCol_durable, {
+    req(userData())  # Ensure userData exists
+    
+    selected_col <- input$wtpCol_durable
+    
+    if (selected_col %in% names(userData())) {
+      column_data <- userData()[[selected_col]]
+      
+      if (!is.numeric(column_data)) {
+        showNotification(
+          "⚠️ Selected column is not numeric! Please choose a valid WTP column.",
+          type = "error",
+          duration = 5 #NULL  # Errors stay until fixed
+        )
+      } else {
+        showNotification(
+          "✅ WTP column selected successfully!",
+          type = "message",
+          duration = 5  # Success message disappears after 5 seconds
+        )
+      }
+    } else {
+      showNotification(
+        "⚠️ Please select a valid column from the dropdown.",
+        type = "warning",
+        duration = 5  # Warnings disappear after 5 seconds
+      )
+    }
+  })  
+  
+  
+  
 # Initialize price_value -----------------------------------------------
   
   # 🚀 Reactive variable to track price globally
@@ -278,24 +340,29 @@ server <- function(input, output, session) {
 # Synchronize fixed and variable cost numeric inputs ----------------------
 
   # ✅ Synchronize Fixed Cost Across Tabs
-  observeEvent(input$fixed_cost, {
-    isolate({
-      if (input$cost_price_fixed_cost != input$fixed_cost) {
-        updateNumericInput(session, "cost_price_fixed_cost", value = input$fixed_cost)
-        }
-      })
-    cat("[DEBUG] Fixed Cost updated to:", input$fixed_cost, "\n")
-    })
+  observe({
+    req(input$fixed_cost)  # Ensure input exists before using it
+    
+    # 🚀 If user deletes the value, set it to a safe default (e.g., 0)
+    safe_fixed_cost <- suppressWarnings(as.numeric(input$fixed_cost))  # Convert to numeric
+    
+    if (is.na(safe_fixed_cost) || safe_fixed_cost < 0) {  
+      cat("[WARNING] Invalid fixed cost. Using fallback value: 0\n")
+      safe_fixed_cost <- 0  # Default to zero since fixed costs can be zero
+      updateNumericInput(session, "fixed_cost", value = safe_fixed_cost)
+    }
+    
+    cat("[DEBUG] Fixed Cost updated to:", safe_fixed_cost, "\n")
+  })
   
   observeEvent(input$cost_price_fixed_cost, {
     isolate({
       if (input$fixed_cost != input$cost_price_fixed_cost) {
         updateNumericInput(session, "fixed_cost", value = input$cost_price_fixed_cost)
-        }
-      })
-    cat("[DEBUG] Fixed Cost updated via Cost-Price Panel:", input$cost_price_fixed_cost, "\n")
+      }
     })
-  
+    cat("[DEBUG] Fixed Cost updated via Cost-Price Panel:", input$cost_price_fixed_cost, "\n")
+  })
   
   
   # ✅ Synchronize Variable Cost Across Tabs
@@ -338,6 +405,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "wtpCol_nondurable", choices = names(userData()))
     updateSelectInput(session, "quantityCol", choices = names(userData()))
     updateSelectInput(session, "quantityFractionCol", choices = names(userData()))
+    updateSelectInput(session, "pEpsilonCol", choices = names(userData()))    
   })
 
 # 🛠 Tabset 1: upload and transform data ---------------------------------    
@@ -372,17 +440,32 @@ server <- function(input, output, session) {
 
   # 1️⃣ Durable Goods
   durableData <- reactive({
-    req(userData(), input$wtpCol_durable)
-    data <- userData() %>%
-      rename(wtp = !!sym(input$wtpCol_durable)) %>%
+    req(userData(), input$wtpCol_durable)  # Ensure input is provided
+    
+    # Validate user-selected column
+    selected_col <- input$wtpCol_durable
+    data <- userData()
+    
+    if (!(selected_col %in% names(data))) {
+      showNotification("⚠️ Error: Selected column does not exist in the dataset.", type = "error")
+      return(tibble())  # Return empty tibble to prevent crash
+    }
+    
+    if (!is.numeric(data[[selected_col]])) {
+      showNotification("⚠️ Error: Selected WTP column must be numeric.", type = "error")
+      return(tibble())  # Return empty tibble to prevent crash
+    }
+    
+    # Proceed with transformation
+    transformed_data <- data %>%
+      rename(wtp = !!sym(selected_col)) %>%
       filter(!is.na(wtp)) %>%
       group_by(wtp) %>%
       summarise(count = n(), .groups = "drop") %>%
       arrange(desc(wtp)) %>%
-      mutate(quantity = cumsum(count),
-             price = wtp)
+      mutate(quantity = cumsum(count), price = wtp)
     
-    return(data)
+    return(transformed_data)
   })
   
   output$durable_transformed <- renderDT({
@@ -457,70 +540,125 @@ server <- function(input, output, session) {
     datatable(priceData())
   })
   
-  # 3️⃣ Non-Durable Goods (WTP)
-  wtpData <- reactive({
-    req(userData())  # Ensure dataset is loaded
-    
-    # Check if all necessary inputs are selected and not empty
-    if (is.null(input$wtpCol_nondurable) || input$wtpCol_nondurable == "" ||
-        is.null(input$quantityCol) || input$quantityCol == "" ||
-        is.null(input$quantityFractionCol) || input$quantityFractionCol == "") {
-      cat("[WARNING] Waiting for user to select all required columns...\n")
-      return(NULL)  # Prevent processing until all selections are made
-    }
-    
-    # Debugging: Print selected column names
-    cat("[DEBUG] Processing wtpData() with selected columns:\n")
-    cat("  - WTP Column:", input$wtpCol_nondurable, "\n")
-    cat("  - Quantity Column:", input$quantityCol, "\n")
-    cat("  - Fraction Quantity Column:", input$quantityFractionCol, "\n")
-    
-    # Ensure columns exist in dataset before using them
-    selected_columns <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
-    missing_columns <- selected_columns[!selected_columns %in% names(userData())]
-    
-    if (length(missing_columns) > 0) {
-      cat("[ERROR] The following selected columns do not exist in the dataset:", paste(missing_columns, collapse=", "), "\n")
-      return(NULL)
-    }
-    
-    # Ensure the selected columns contain valid data
-    for (col in selected_columns) {
-      if (!is.numeric(userData()[[col]])) {
-        cat("[ERROR] Selected column", col, "contains non-numeric data. Skipping processing...\n")
-        return(NULL)
-      }
-    }
-    
-    # Process the data
-    data <- userData() %>%
-      rename(wtp = !!sym(input$wtpCol_nondurable),
-             q = !!sym(input$quantityCol),
-             q_frac = !!sym(input$quantityFractionCol)) %>%
-      filter(!is.na(wtp), !is.na(q), !is.na(q_frac)) %>%
-      mutate(wtp_frac = wtp * input$fraction) %>%
-      pivot_longer(cols = c(wtp, wtp_frac), names_to = "price_type", values_to = "price") %>%
-      pivot_longer(cols = c(q, q_frac), names_to = "quantity_type", values_to = "quantity") %>%
-      filter((price_type == "wtp" & quantity_type == "q") |
-               (price_type == "wtp_frac" & quantity_type == "q_frac")) %>%
-      group_by(price) %>%
-      summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
-      arrange(desc(price)) %>%
-      mutate(quantity = cumsum(quantity))  
-    
-    return(data)
+
+  
+    # 3️⃣ Non-Durable Goods (WTP)
+  
+  observeEvent(userData(), {
+    updateSelectInput(session, "wtpCol_nondurable", 
+                      choices = c("Please Select" = "", names(userData())))
+    updateSelectInput(session, "quantityCol", 
+                      choices = c("Please Select" = "", names(userData())))
+    updateSelectInput(session, "quantityFractionCol", 
+                      choices = c("Please Select" = "", names(userData())))
+    updateSelectInput(session, "pEpsilonCol", 
+                      choices = c("Please Select" = "", names(userData())))
   })
   
-  output$wtp_transformed <- renderDT({
-    req(wtpData())
-    datatable(wtpData())
+  # Exponential decay function
+  exp_decay_monotonic <- function(P_seq, Q0, P_epsilon, P_max, Q_max) {
+    Q <- numeric(length(P_seq))
+    
+    if (Q_max < Q0) {
+      k <- log(Q0 / Q_max) / (P_max - P_epsilon)  
+    } else {
+      k <- Inf  # Invalid case, assume sharp drop-off
+    }
+    
+    for (i in seq_along(P_seq)) {
+      P <- P_seq[i]
+      if (P <= P_epsilon) {
+        Q[i] <- Q0
+      } else if (P < P_max) {
+        Q[i] <- Q0 * exp(-k * (P - P_epsilon))
+      } else if (P == P_max) {  
+        Q[i] <- Q_max  # Preserve Q_max at P_max
+      } else {
+        Q[i] <- 0
+      }
+    }
+    return(Q)
+  }
+  
+
+  wtpData <- reactive({
+    req(userData(), input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol, input$pEpsilonCol)
+    
+    df <- userData() %>%
+      rename(
+        P_max = !!sym(input$wtpCol_nondurable),
+        Q_max = !!sym(input$quantityCol),
+        Q0 = !!sym(input$quantityFractionCol),
+        P_epsilon = !!sym(input$pEpsilonCol)
+      ) %>%
+      mutate(
+        P_max = as.numeric(P_max),
+        Q_max = as.numeric(Q_max),
+        Q0 = as.numeric(Q0),
+        P_epsilon = as.numeric(P_epsilon)
+      ) %>%
+      filter(!is.na(P_max) & !is.na(Q_max) & !is.na(Q0) & !is.na(P_epsilon))  # ✅ Removes NA rows
+    
+    if (nrow(df) == 0) return(NULL)
+    
+    #price_seq <- df %>%      filter(!is.na(P_max) & P_max > 0) %>%      pull(P_max) %>%      unique() %>%      sort()
+    
+    price_seq <- unique(sort(na.omit(df$P_max)))
+    print(paste("Generated price_seq has", length(price_seq), "values"))  # Debugging print
+    
+    if (length(price_seq) < 2) {
+      warning("[WARNING] Not enough unique price points in P_max for meaningful demand modeling.")
+    }
+    
+    print("Checking data before calling exp_decay_monotonic():")
+    print(head(df))  # ✅ Debugging print
+    print("Unique P_max values:")
+    print(unique(df$P_max))
+    print("Generated price_seq:")
+    print(price_seq)
+    
+    individual_quantity <- df %>%
+      rowwise() %>%
+      mutate(Q_predicted = list(exp_decay_monotonic(price_seq, Q0, P_epsilon, P_max, Q_max))) %>%
+      unnest(Q_predicted) %>%
+      mutate(price = rep(price_seq, times = nrow(df))) %>%
+      filter(price <= P_max)  # Enforce price cutoff at P_max
+
+    print(nrow(individual_quantity))  # Should return (num respondents × 10)
+    
+    print(individual_quantity %>%
+      filter(price == 5) %>%
+      summarise(total_quantity = sum(Q_predicted, na.rm = TRUE))
+    )
+    
+    print(individual_quantity %>%
+      filter(price > P_max) %>%
+      summarise(total_quantity = sum(Q_predicted, na.rm = TRUE))
+    )
+    
+    market_quantity <- individual_quantity %>%
+      group_by(price) %>%
+      summarise(quantity = sum(Q_predicted, na.rm = TRUE), .groups = "drop") %>%
+      complete(price = price_seq, fill = list(total_quantity = 0))  %>% # Ensure missing prices are filled
+      mutate(quantity = round(quantity, 0))
+    
+    print(nrow(market_quantity))  # Should return 10
+    
+    print("Transformed Data Preview:")
+    print((market_quantity))  # ✅ Debugging print
+    
+    return(market_quantity)
   })
 
-
-
-# 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
-
-    respondentCount <- reactive({
+  output$wtp_transformed <- renderDT({
+    req(wtpData())  # Ensure data exists before rendering
+    datatable(wtpData())
+  })
+  
+  
+  # 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
+  
+  respondentCount <- reactive({
     req(input$file1, input$tabset_data)
     
     active_tab <- input$tabset_data
@@ -532,8 +670,8 @@ server <- function(input, output, session) {
                     NULL)
     
     return(count)
-})
-
+  })
+  
 # 🚀 Reactive: select transformed data from the correct scenario 🚀 -------
 
     # 🔄 Reactive: Select transformed data from the correct scenario
@@ -700,6 +838,11 @@ server <- function(input, output, session) {
   output$demand_plot <- renderPlot({
     req(transformedData(), demandModel(), input$price, input$demand_view)
     
+    if (nrow(data) == 0) {
+    showNotification("⚠️ Warning: No valid durable goods data available.", type = "warning")
+    return(NULL)  # Stop execution and return nothing
+  }
+    
     tb <- transformedData()  # Get sample data
     model_list <- demandModel()
     model <- model_list$model
@@ -721,10 +864,6 @@ server <- function(input, output, session) {
     tb <- tb %>%
       mutate(scaled_quantity = quantity * scaling_factor)
     
-    # ✅ Debugging: Show first few rows before plotting
-#    cat("Sample Data (First 5 Rows Before Scaling):\n")
-#    print(head(tb, 5))
-    
     # ✅ Choose appropriate demand function
     demand_func <- if (demand_view == "sample") {
       switch(model_type,
@@ -744,10 +883,6 @@ server <- function(input, output, session) {
         demand_view == "market" ~ scaled_quantity,  
         TRUE ~ quantity  # Sample demand uses original quantity
       ))
-    
-    # ✅ Debugging: Show transformed data
-#    cat("Scaled Data (First 5 Rows for Market Demand):\n")
-#    print(head(tb, 5))
     
     # ✅ Determine the correct R² or pseudo R² value
     r_squared <- if (model_type == "Sigmoid") {
@@ -1213,6 +1348,7 @@ server <- function(input, output, session) {
                       max = round(cost_price_calculations()$max_price, 2),
                       value = price_value(),  # ✅ Use updated value
                       step = pmax(round(cost_price_calculations()$max_price / 100, 2), 0.01))
+#                     step = .01)
   })
   
   
@@ -1248,7 +1384,7 @@ server <- function(input, output, session) {
                               "\nQuantity: ", scales::comma(round(quantity_at_price, 2)),
                               "\nCost: $", scales::comma(round(cost_at_price, 2))),
                hjust = 0, vjust = 1, 
-               color = "red3", fontface = "bold", size = 5) +
+               color = "tomato2", fontface = "bold", size = 5) +
       scale_x_continuous(limits = c(0, 1.05 * max_price), labels = scales::dollar_format()) +  
       scale_y_continuous(limits = c(0, cost_func(0)), labels = scales::dollar_format()) +
       theme_minimal()
@@ -1349,20 +1485,6 @@ server <- function(input, output, session) {
     cat("\n[DEBUG] Demand Model Coefficients:\n")
     print(coef(model))
     
-    # 🛠 Print function outputs at key price points
-    test_prices <- seq(0, max_price, length.out = 5)
-    cat("\n[DEBUG] Demand Function Output (Q at Key Prices):\n")
-    print(data.frame(Price = test_prices, Quantity = sapply(test_prices, demand_profit_func)))
-    
-    cat("\n[DEBUG] Revenue Function Output (R at Key Prices):\n")
-    print(data.frame(Price = test_prices, Revenue = sapply(test_prices, revenue_func)))
-    
-    cat("\n[DEBUG] Cost Function Output (C at Key Prices):\n")
-    print(data.frame(Price = test_prices, Cost = sapply(test_prices, cost_func)))
-    
-    cat("\n[DEBUG] Profit Function Output (π at Key Prices):\n")
-    print(data.frame(Price = test_prices, Profit = sapply(test_prices, profit_func)))
-    
     return(list(
       max_price = max_price,
       max_revenue = max_revenue,
@@ -1409,6 +1531,13 @@ server <- function(input, output, session) {
     cat("\n[DEBUG] Evaluated Revenue, Cost, and Profit Data:\n")
     print(head(data))
     
+    cat("[DEBUG] Optimal Values Before Formatting:\n")
+    cat("Optimal Price:", optimal_price, "\n")
+    cat("Optimal Profit:", optimal_profit, "\n")
+    cat("Optimal Quantity:", optimal_quantity, "\n")
+    cat("Optimal Revenue:", optimal_revenue, "\n")
+    cat("Optimal Cost:", optimal_cost, "\n")
+    
     # ✅ Generate Profit Plot
     ggplot(data, aes(x = Price)) +
       geom_line(aes(y = Revenue), color = "royalblue", linewidth = 2) +  # ✅ Explicitly plot evaluated function values
@@ -1419,12 +1548,13 @@ server <- function(input, output, session) {
       geom_vline(xintercept = optimal_price, linetype = "dashed", color = "black") +
       annotate("point", x = optimal_price, y = optimal_profit, color = "black", shape = 21, fill = "white", size = 4) +
       annotate("text", x = max_price * 1.0, y = max_revenue,
-               label = paste("P* = $", round(optimal_price, 2),
-                             "\nπ* = $", round(optimal_profit, 2),
-                             "\nQ* = ", round(optimal_quantity, 2),
-                             "\nR = $", round(optimal_revenue, 2),
-                             "\nC = $", round(optimal_cost, 2)
-                             ), 
+               label = paste(
+                 "P* = ", scales::dollar_format(accuracy = 0.01)(optimal_price),
+                 "\nπ* = ", scales::dollar_format(accuracy = 0.01)(optimal_profit),
+                 "\nQ* = ", scales::comma_format(accuracy = 0.01)(optimal_quantity),
+                 "\nR = ", scales::dollar_format(accuracy = 0.01)(optimal_revenue),
+                 "\nC = ", scales::dollar_format(accuracy = 0.01)(optimal_cost)
+                 ),
                hjust = 1, vjust = 1, size = 5, color = "black") +
       
       labs(title = "Optimal Profit, Revenue, and Cost",
@@ -1446,6 +1576,71 @@ server <- function(input, output, session) {
     cat("Total Cost: $", round(pc$optimal_cost, 2), "\n")
     cat("Maximum Profit: $", round(pc$optimal_profit, 2), "\n")
   })
+  
+  
+
+# Break-even analysis -----------------------------------------------------
+
+  output$breakeven_plot <- renderPlot({
+    req(profitCalculations(), input$variable_cost, input$fixed_cost)  # Ensure profit calculations exist
+    
+    # Extract necessary variables
+    calculations <- profitCalculations()
+    P_star <- calculations$optimal_price  # Optimal price
+    C_var <- input$variable_cost          # Variable cost per unit
+    C_fixed <- input$fixed_cost           # Fixed cost
+    
+    # Validate break-even feasibility
+    if (P_star <= C_var) {
+      output$breakeven_summary <- renderText({
+        "Break-even is not achievable because the optimal price is less than or equal to variable cost."
+      })
+      return(NULL)  # Stop plotting if break-even is impossible
+    }
+    
+    # Calculate Break-Even Quantity
+    Q_BE <- C_fixed / (P_star - C_var)
+    
+    # Define Q range
+    Q_vals <- seq(0, Q_BE * 1.5, length.out = 100)
+    
+    # Revenue, Cost, and Profit Functions
+    revenue_func <- P_star * Q_vals
+    cost_func <- C_fixed + C_var * Q_vals
+    profit_func <- revenue_func - cost_func
+    
+    # Plot
+    ggplot() +
+      geom_hline(yintercept = 0, linetype = "solid", color = "black", size = 1) +  # Zero-profit line
+      geom_line(aes(Q_vals, cost_func), color = "tomato", size = 2, linetype = "solid") +  # Cost
+      geom_line(aes(Q_vals, revenue_func), color = "royalblue", size = 2, linetype = "solid") +  # Revenue
+      geom_line(aes(Q_vals, profit_func), color = "forestgreen", size = .8, linetype = "dotdash") +  # Profit
+      geom_vline(xintercept = Q_BE, linetype = "dotted", color = "black", size = 0.5) +  # BEQ Vertical Line
+      annotate("text", x = Q_BE * 1.1, y = C_fixed * 1.2, 
+               label = paste("Break-even Q:", round(Q_BE, 1)),  # 🔹 Ensures Q > BEQ
+               hjust = 0, size = 5) +
+      labs(title = "Break-Even Analysis",
+           x = "Quantity Sold (Q)", y = "Dollars ($)") +
+      scale_y_continuous(labels = scales::dollar_format()) +
+      theme_minimal()
+  })
+  
+  output$breakeven_summary <- renderText({
+    req(profitCalculations())
+    calculations <- profitCalculations()
+    P_star <- calculations$optimal_price  
+    C_var <- input$variable_cost
+    C_fixed <- input$fixed_cost
+    
+    if (P_star <= C_var) {
+      return("Break-even is not achievable because the optimal price is less than or equal to variable cost.")
+    }
+    
+    Q_BE <- C_fixed / (P_star - C_var)
+    
+    paste("Break-even occurs at approximately", round(Q_BE, 1), "units.")
+  })
+  
 
 }
 

@@ -357,6 +357,40 @@ ui <- fluidPage(
     options(shiny.reactlog = TRUE) # enable visualizing dependencies - a quasi-reactive-graph
     
     
+    # Check return warnings if durable WTP variable is not numeric ------------
+    
+    observeEvent(input$wtpCol_durable, {
+      req(userData())  # Ensure userData exists
+      
+      selected_col <- input$wtpCol_durable
+      
+      if (selected_col %in% names(userData())) {
+        column_data <- userData()[[selected_col]]
+        
+        if (!is.numeric(column_data)) {
+          showNotification(
+            "⚠️ Selected column is not numeric! Please choose a valid WTP column.",
+            type = "error",
+            duration = 5 #NULL  # Errors stay until fixed
+          )
+        } else {
+          showNotification(
+            "✅ WTP column selected successfully!",
+            type = "message",
+            duration = 5  # Success message disappears after 5 seconds
+          )
+        }
+      } else {
+        showNotification(
+          "⚠️ Please select a valid column from the dropdown.",
+          type = "warning",
+          duration = 5  # Warnings disappear after 5 seconds
+        )
+      }
+    })  
+    
+    
+    
     # Update the numeric price inputs in an observe function ------------------
     
     observe({
@@ -428,9 +462,22 @@ ui <- fluidPage(
     
     
     
+    #  output$selected_column_display <- renderUI({
+    #    req(input$wtpCol_durable)  # Ensure selection exists
+    #    
+    #    wellPanel(
+    #      h5("Selected Column:"),
+    #      div(style = "white-space: normal; word-wrap: break-word;",  
+    #          strong(input$wtpCol_durable))  # Ensures long names wrap instead of overflowing
+    #    )
+    #  })
+    
+    
+    
     ###################   
     ###################     
     ###################     
+    
     
     # 🛠 Tabset 1: upload and transform data ---------------------------------    
     
@@ -462,25 +509,20 @@ ui <- fluidPage(
     
     
     observeEvent(userData(), {
-      req(userData())  
-      if (sum(is.na(userData())) > 0) {  
-        showNotification(paste0("Warning: Dataset contains ", sum(is.na(userData())), " missing values. Rows with NA will be excluded."), 
-                         type = "warning")
+      #    cat("[DEBUG] Checking is.na() on userData():", class(userData()), "\n")  
+      if (any(is.na(userData()))) {
+        showNotification("Warning: Dataset contains missing values. Rows with NA will be excluded.", type = "warning")
       }
-    })
+    })  
     
     # 🚀 Reactive: Demand Data Transformations 🚀 ------------------------------
     
     # Dynamically update column selection
     observeEvent(userData(), {
-      req(userData())  # Ensure data exists before proceeding
-      
-      col_names <- names(userData())
-      
-      if (length(col_names) == 0) return()  # Avoid updating empty pickers
+      col_names <- names(userData())  # Get column names
       
       picker_inputs <- c("wtpCol_durable", "start_price", "end_price", 
-                         "wtpCol_nondurable", "quantityCol", "quantityFractionCol")
+                         "wtpCol_nondurable", "quantityCol", "quantityFractionCol", "pEpsilonCol")
       
       for (picker in picker_inputs) {
         updatePickerInput(session, picker, choices = col_names, selected = "")
@@ -490,210 +532,98 @@ ui <- fluidPage(
     
     # Create transformData function to perform all data transformations -------
     
-transformData <- function(data, selected_col, transformation_type) {
-  req(data, selected_col)  # Ensure data and column are provided
-  
-  cat("[DEBUG] Transformation Type:", transformation_type, "\n")  # ✅ Print type
-  
-  # 🔹 Validate transformation type
-  if (!(transformation_type %in% c("Durable Goods", "Non-Durable (Prices)", "Non-Durable (WTP)"))) {
-    showNotification("⚠️ Error: Unknown transformation type!", type = "error")
-    return(tibble())
-  }
-  
-  # 🔹 Ensure selected columns are valid
-  if (is.null(selected_col) || any(selected_col == "")) {
-    showNotification("⚠️ Error: Missing required columns!", type = "error")
-    cat("[DEBUG] Missing columns for", transformation_type, "\n")
-    return(tibble())
-  }
-
-  # 🔹 Ensure columns exist
-  missing_cols <- selected_col[!selected_col %in% names(data)]
-  if (length(missing_cols) > 0) {
-    showNotification(paste("⚠️ Error: Columns not found in dataset:", paste(missing_cols, collapse = ", ")), type = "error")
-    return(tibble())
-  }
-
-  # 🔹 Ensure numeric values
-  if (any(!sapply(data[selected_col], is.numeric))) {
-    showNotification("⚠️ Error: Selected columns must be numeric!", type = "error")
-    return(tibble())
-  }
-
-  # 🔹 Proceed based on transformation type
-  transformed_data <- switch(transformation_type,
-                             
-                             # ✅ Durable Goods Transformation
-                             "Durable Goods" = {
-                               cat("[DEBUG] Running Durable Goods Transformation\n")
-                               data %>%
-                                 rename(wtp = !!sym(selected_col)) %>%
-                                 filter(!is.na(wtp)) %>%
-                                 group_by(wtp) %>%
-                                 summarise(count = n(), .groups = "drop") %>%
-                                 arrange(desc(wtp)) %>%
-                                 mutate(quantity = cumsum(count), price = wtp)
-                             },
-                             
-                             
-                             "Non-Durable (Prices)" = {
-                               cat("[DEBUG] Running Non-Durable Prices Transformation\n")
-                               
-                               if (length(selected_col) != 2) {
-                                 showNotification("⚠️ Error: Please select exactly two price columns.", type = "error")
-                                 return(tibble())
-                               }
-                               
-                               # 🔹 Find start & end positions in the dataframe column index
-                               col_index <- which(names(data) %in% selected_col)
-                               if (length(col_index) != 2) {
-                                 showNotification("⚠️ Error: Could not determine column range.", type = "error")
-                                 return(tibble())
-                               }
-                               
-                               # 🔹 Select all columns between (and including) the two selected columns
-                               selected_range <- names(data)[min(col_index):max(col_index)]
-                               
-                               # 🔹 Pivot all selected columns into long format
-                               transformed_data <- data %>%
-                                 select(all_of(selected_range)) %>%
-                                 pivot_longer(cols = everything(), names_to = "price", values_to = "quantity") %>%
+    transformData <- function(data, selected_col, transformation_type) {
+      req(data, selected_col)  # Ensure data and column are provided
+      
+      # 🔹 Ensure selected columns exist
+      if (!all(selected_col %in% names(data))) {
+        showNotification("⚠️ Error: Some required columns are missing!", type = "error")
+        return(tibble())  # Prevent crash
+      }
+      
+      # 🔹 Ensure selected columns are numeric
+      if (!all(sapply(data[selected_col], is.numeric))) {
+        showNotification("⚠️ Error: Selected columns must be numeric.", type = "error")
+        return(tibble())  # Prevent crash
+      }
+      
+      # Extract relevant columns
+      column_data <- data[selected_col]
+      
+      # 🔹 Ensure selected columns have valid (non-NA) values
+      if (any(sapply(column_data, function(col) all(is.na(col))))) {
+        showNotification("⚠️ Error: Selected columns contain only missing values!", type = "error")
+        return(tibble())
+      }
+      
+      # 🔹 Transform based on type
+      transformed_data <- switch(transformation_type,
+                                 "durable" = data %>%
+                                   rename(wtp = !!sym(selected_col)) %>%
+                                   filter(!is.na(wtp)) %>%
+                                   group_by(wtp) %>%
+                                   summarise(count = n(), .groups = "drop") %>%
+                                   arrange(desc(wtp)) %>%
+                                   mutate(quantity = cumsum(count), price = wtp),
                                  
-                                 # 🔹 Extract numeric price values (handles "P0.5", "P2.5", etc.)
-                                 mutate(price = as.numeric(str_extract(price, "\\d+\\.?\\d*")),
-                                        quantity = as.numeric(quantity)) %>%
+                                 "nondurable_prices" = {
+                                   data %>%
+                                     select(all_of(selected_col)) %>%
+                                     pivot_longer(cols = everything(), names_to = "price", values_to = "quantity") %>%
+                                     mutate(price = as.numeric(str_extract(price, "\\d+\\.?\\d*")),
+                                            quantity = as.numeric(quantity)) %>%
+                                     filter(!is.na(price), !is.na(quantity)) %>%
+                                     group_by(price) %>%
+                                     summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
+                                     relocate(price, quantity)
+                                 },
                                  
-                                 # 🔹 Remove any NA values
-                                 filter(!is.na(price), !is.na(quantity)) %>%
+                                 "nondurable_wtp" = {
+                                   data %>%
+                                     rename(P_max = !!sym(selected_col[1]),
+                                            Q_max = !!sym(selected_col[2]),
+                                            Q0 = !!sym(selected_col[3])) %>%
+                                     mutate(across(everything(), as.numeric)) %>%
+                                     filter(!is.na(P_max) & !is.na(Q_max) & !is.na(Q0)) %>%
+                                     mutate(
+                                       slope = (Q_max - Q0) / (P_max - 0),  # Linear demand slope (ΔQ / ΔP)
+                                       intercept = Q0,  # Q-intercept at P = 0
+                                       price = seq(0, P_max, length.out = 100),  # Generate price points
+                                       quantity = intercept + slope * price  # Compute linear demand
+                                     ) %>%
+                                     select(price, quantity)
+                                 },
                                  
-                                 # 🔹 Summarize by price level
-                                 group_by(price) %>%
-                                 summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
-                                 
-                                 # 🔹 Ensure prices appear in ascending order
-                                 arrange(price) %>%
-                                 
-                                 # 🔹 Ensure final order: price, quantity
-                                 relocate(price, quantity)
-                               
-                               # 🚀 Debugging: Print transformed data
-                               cat("[DEBUG] Transformed Data Sample:\n")
-                               print(head(transformed_data))
-                               
-                               cat("[DEBUG] Price column:\n")
-                               print(transformed_data$price)
-                               
-                               any(is.na(transformed_data$price))  # TRUE means some NAs exist
-                               any(is.logical(transformed_data$price))  # TRUE means logical values exist
-                               
-                               return(transformed_data)
-                             },
-                             
-                             
-                             # ✅ Non-Durable WTP Transformation (FIXED)
-                             "Non-Durable (WTP)" = {
-                               cat("[DEBUG] Running Non-Durable WTP Transformation\n")
-                               
-                               if (length(selected_col) != 3) {
-                                 showNotification("⚠️ Error: Please select exactly three columns.", type = "error")
-                                 return(tibble())
-                               }
-                               
-                               df <- data %>%
-                                 rename(P_max = !!sym(selected_col[1]),
-                                        Q_max = !!sym(selected_col[2]),
-                                        Q0 = !!sym(selected_col[3])) %>%
-                                 mutate(across(everything(), as.numeric)) %>%
-                                 filter(!is.na(P_max) & !is.na(Q_max) & !is.na(Q0)) %>%
-                                 
-                                 # 🔹 Ensure P_max is always positive
-                                 filter(P_max > 0) %>%
-                                 
-                                 # 🔹 Calculate slope and intercept for each individual
-                                 mutate(slope = (Q_max - Q0) / P_max,
-                                        intercept = Q0)
-                               
-                               if (nrow(df) == 0) return(tibble())  # 🚨 Prevent empty dataset errors
-                               
-                               # 🔹 Generate Unique Price Sequence (including P=0)
-                               price_seq <- unique(sort(na.omit(df$P_max)))
-                               price_seq <- c(0, price_seq)  # Ensure P=0 is included
-                               
-                               # 🔹 Compute Individual Demand at Each Price
-                               individual_quantity <- df %>%
-                                 rowwise() %>%
-                                 mutate(Q_predicted = list(
-                                   map_dbl(price_seq, function(P) {
-                                     if (P == 0) return(Q0)  # Base demand at P=0
-                                     if (P < P_max) return(intercept + slope * P)  # Linearly decreasing demand
-                                     return(0)  # Demand drops to 0 above P_max
-                                   })
-                                 )) %>%
-                                 unnest(Q_predicted) %>%
-                                 mutate(price = rep(price_seq, times = nrow(df))) %>%
-                                 filter(price <= P_max)  # Ensure demand is 0 beyond WTP
-                               
-                               # 🔹 Aggregate Across Respondents
-                               market_quantity <- individual_quantity %>%
-                                 group_by(price) %>%
-                                 summarise(quantity = sum(Q_predicted, na.rm = TRUE), .groups = "drop") %>%
-                                 mutate(quantity = round(quantity, 0)) %>%
-                                 arrange(desc(price))  # Ensure descending order
-                               
-                               return(market_quantity)
-                             },
-                             
-                             # 🚨 Catch-All Error Handling
-                             {
-                               showNotification("⚠️ Error: Unknown transformation type!", type = "error")
-                               return(tibble())
-                             }
-                             )
-  
-  return(transformed_data)
-}
+                                 {  
+                                   showNotification("⚠️ Error: Unknown transformation type!", type = "error")
+                                   return(tibble())
+                                 }
+      )
+      
+      return(transformed_data)
+    }
     
     
-
+    # durableData <- reactive({
+    #   req(userData(), input$wtpCol_durable)
+    #   transformData(userData(), input$wtpCol_durable, "durable")
+    # })
+    # 
+    # priceData <- reactive({
+    #   req(userData(), input$start_price, input$end_price)
+    #   transformData(userData(), c(input$start_price, input$end_price), "price")
+    # })
+    # 
+    # wtpData <- reactive({
+    #   req(userData(), input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol, input$pEpsilonCol)
+    #   transformData(userData(), c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol, input$pEpsilonCol), "wtp")
+    # })
+    
     selected_tab_data <- reactive({
-      req(input$tabset_data, userData())  # Ensure a tab is selected and data exists
-      
-      active_tab <- input$tabset_data
-      selected_cols <- NULL  # Initialize column selection
-      
-      # Assign selected columns based on active tab
-      if (active_tab == "Durable Goods") {
-        req(input$wtpCol_durable)
-        selected_cols <- input$wtpCol_durable
-        
-      } else if (active_tab == "Non-Durable (Prices)") {
-        req(input$start_price, input$end_price)
-        selected_cols <- c(input$start_price, input$end_price)
-        
-      } else if (active_tab == "Non-Durable (WTP)") {
-        req(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
-        selected_cols <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
-      }
-      
-      # ✅ Ensure we have selected columns before proceeding
-      if (is.null(selected_cols) || any(selected_cols == "")) {
-        cat("[DEBUG] No valid columns selected for", active_tab, "\n")
-        return(NULL)
-      }
-      
-      # 🔹 Pass the selected columns properly to `transformData()`
-      tryCatch({
-        transformData(userData(), selected_cols, active_tab)
-      }, error = function(e) {
-        cat("[ERROR] transformData() failed:", e$message, "\n")
-        return(NULL)
-      })
+      req(input$tabset_data)  # Ensure a tab is selected
+      transformData(input$tabset_data)  # Calls the new unified function
     })
-
-
     
-    # 📌 Output: Display Data Transformations 📌 -------------------------------      
     output$transformed_data <- renderDT({
       req(selected_tab_data())  
       datatable(selected_tab_data())  # Uses the dynamically selected transformed data
@@ -701,7 +631,264 @@ transformData <- function(data, selected_col, transformation_type) {
     
     
     
-
+    # 📌 Output: Display Data Transformations 📌 -------------------------------  
+    
+    # # 1️⃣ Durable Goods
+    # durableData <- reactive({
+    #   req(userData(), input$wtpCol_durable)  # Ensure input is provided
+    #   
+    #   # Validate user-selected column
+    #   selected_col <- input$wtpCol_durable
+    #   data <- userData()
+    #   
+    #   # 🔹 Debug: Confirm input selection
+    #   cat("[DEBUG] Selected Column:", selected_col, "\n")
+    #   cat("[DEBUG] Available Columns:", names(data), "\n")
+    #   
+    #   # 🔹 Ensure column exists
+    #   if (!(selected_col %in% names(data))) {
+    #     showNotification("⚠️ Error: Selected column does not exist in the dataset.", type = "error")
+    #     return(tibble())  # Prevent crash
+    #   }
+    #   
+    #   # 🔹 Ensure column is numeric
+    #   if (!is.numeric(data[[selected_col]])) {
+    #     showNotification("⚠️ Error: Selected WTP column must be numeric.", type = "error")
+    #     return(tibble())  # Prevent crash
+    #   }
+    #   
+    #   # 🔹 Proceed with transformation
+    #   transformed_data <- data %>%
+    #     rename(wtp = !!sym(selected_col)) %>%
+    #     filter(!is.na(wtp)) %>%
+    #     group_by(wtp) %>%
+    #     summarise(count = n(), .groups = "drop") %>%
+    #     arrange(desc(wtp)) %>%
+    #     mutate(quantity = cumsum(count), price = wtp)
+    #   
+    #   # 🔹 Debug: Ensure transformed data is not empty
+    #   if (nrow(transformed_data) == 0) {
+    #     cat("[WARNING] Transformed Data is EMPTY!\n")
+    #   }
+    #   
+    #   return(transformed_data)
+    # })
+    # 
+    # 
+    # observe({
+    #   cat("[DEBUG] durableData() was triggered\n")
+    #   if (!is.null(durableData()) && nrow(durableData()) > 0) {
+    #     cat("[DEBUG] durableData() contains", nrow(durableData()), "rows\n")
+    #   } else {
+    #     cat("[WARNING] durableData() is NULL or EMPTY!\n")
+    #   }
+    # })
+    # 
+    # 
+    # output$durable_transformed <- renderDT({
+    #   req(durableData())  # Ensure data exists before rendering
+    #   
+    #   transformed <- durableData()
+    #   
+    #   # Debugging output
+    #   cat("[DEBUG] Rendering durableData - First 5 Rows:\n")
+    #   print(head(transformed))  # ✅ Print first few rows of transformed data
+    #   
+    #   datatable(transformed)
+    # })
+    # 
+    # observe({
+    #   req(durableData())
+    #   cat("[DEBUG] durable_transformed is being rendered\n")
+    # })
+    # 
+    # observeEvent(input$wtpCol_durable, {
+    #   cat("[DEBUG] User selected column in pickerInput:", input$wtpCol_durable, "\n")
+    # })
+    # 
+    # # 🚀 Debugging Observers: BEFORE priceData()
+    # observe({
+    #   req(userData(), input$start_price, input$end_price)
+    #   #cat("[DEBUG] Selected start_price:", input$start_price, "\n")
+    #   #cat("[DEBUG] Selected end_price:", input$end_price, "\n")
+    #   
+    #   start_index <- which(names(userData()) == input$start_price)
+    #   end_index <- which(names(userData()) == input$end_price)
+    #   
+    #   if (length(start_index) == 0 || length(end_index) == 0) {
+    #     cat("[ERROR] start_index or end_index is not valid!\n")
+    #   } else {
+    #     cat("[DEBUG] start_index:", start_index, "end_index:", end_index, "\n")
+    #   }
+    # })
+    # 
+    # # 🚀 Reactive Function: priceData()
+    # priceData <- reactive({
+    #   req(userData())  # Ensure data is available
+    #   
+    #   # 🚀 Ensure selections are made before proceeding
+    #   if (is.null(input$start_price) || input$start_price == "" ||
+    #       is.null(input$end_price) || input$end_price == "") {
+    #     cat("[DEBUG] Waiting for user to select both start and end price columns.\n")
+    #     return(NULL)  # ⛔ Prevents execution until selections exist
+    #   }
+    #   
+    #   start_index <- which(names(userData()) == input$start_price)
+    #   end_index <- which(names(userData()) == input$end_price)
+    #   
+    #   # 🚀 Check that valid numeric columns are selected
+    #   if (length(start_index) == 0 || length(end_index) == 0 || start_index > end_index) {
+    #     cat("[ERROR] Invalid start or end index. Check column selections.\n")
+    #     return(NULL)  # ⛔ Prevents errors before pivot_longer
+    #   }
+    #   
+    #   # ✅ Ensure that the selected columns are numeric before pivoting
+    #   selected_cols <- names(userData())[start_index:end_index]
+    #   numeric_cols <- selected_cols[sapply(userData()[selected_cols], is.numeric)]
+    #   
+    #   if (length(numeric_cols) == 0) {
+    #     cat("[ERROR] Selected price columns are not numeric. Waiting for valid selections.\n")
+    #     return(NULL)  # ⛔ Prevents execution if columns are not numeric
+    #   }
+    #   
+    #   cat("[DEBUG] Processing price data with selected numeric columns: ", paste(numeric_cols, collapse=", "), "\n")
+    #   
+    #   # ✅ Now safely transform the numeric price columns
+    #   data <- userData() %>%
+    #     select(all_of(numeric_cols)) %>%  # ✅ Only process numeric columns
+    #     pivot_longer(cols = everything(), names_to = "price", values_to = "quantity") %>%
+    #     filter(str_detect(price, "\\d+")) %>%  # ✅ Remove non-numeric price values
+    #     mutate(price = as.numeric(str_extract(price, "\\d+\\.?\\d*")),
+    #            quantity = as.numeric(quantity)) %>%  # ✅ Ensure quantity is numeric
+    #     filter(!is.na(price), !is.na(quantity)) %>%
+    #     group_by(price) %>%
+    #     summarise(quantity = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
+    #     relocate(c(price, quantity))
+    #   
+    #   return(data)
+    # })
+    # 
+    # output$price_transformed <- renderDT({
+    #   req(priceData())
+    #   datatable(priceData())
+    # })
+    # 
+    
+    
+    # 3️⃣ Non-Durable Goods (WTP)
+    
+    observeEvent(userData(), {
+      updateSelectInput(session, "wtpCol_nondurable", 
+                        choices = c("Please Select" = "", names(userData())))
+      updateSelectInput(session, "quantityCol", 
+                        choices = c("Please Select" = "", names(userData())))
+      updateSelectInput(session, "quantityFractionCol", 
+                        choices = c("Please Select" = "", names(userData())))
+      updateSelectInput(session, "pEpsilonCol", 
+                        choices = c("Please Select" = "", names(userData())))
+    })
+    
+    # Exponential decay function
+    exp_decay_monotonic <- function(P_seq, Q0, P_epsilon, P_max, Q_max) {
+      Q <- numeric(length(P_seq))
+      
+      if (Q_max < Q0) {
+        k <- log(Q0 / Q_max) / (P_max - P_epsilon)  
+      } else {
+        k <- Inf  # Invalid case, assume sharp drop-off
+      }
+      
+      for (i in seq_along(P_seq)) {
+        P <- P_seq[i]
+        if (P <= P_epsilon) {
+          Q[i] <- Q0
+        } else if (P < P_max) {
+          Q[i] <- Q0 * exp(-k * (P - P_epsilon))
+        } else if (P == P_max) {  
+          Q[i] <- Q_max  # Preserve Q_max at P_max
+        } else {
+          Q[i] <- 0
+        }
+      }
+      return(Q)
+    }
+    
+    
+    wtpData <- reactive({
+      req(userData(), input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol, input$pEpsilonCol)
+      
+      df <- userData() %>%
+        rename(
+          P_max = !!sym(input$wtpCol_nondurable),
+          Q_max = !!sym(input$quantityCol),
+          Q0 = !!sym(input$quantityFractionCol),
+          P_epsilon = !!sym(input$pEpsilonCol)
+        ) %>%
+        mutate(
+          P_max = as.numeric(P_max),
+          Q_max = as.numeric(Q_max),
+          Q0 = as.numeric(Q0),
+          P_epsilon = as.numeric(P_epsilon)
+        ) %>%
+        filter(!is.na(P_max) & !is.na(Q_max) & !is.na(Q0) & !is.na(P_epsilon))  # ✅ Removes NA rows
+      
+      if (nrow(df) == 0) return(NULL)
+      
+      #price_seq <- df %>%      filter(!is.na(P_max) & P_max > 0) %>%      pull(P_max) %>%      unique() %>%      sort()
+      
+      price_seq <- unique(sort(na.omit(df$P_max)))
+      print(paste("Generated price_seq has", length(price_seq), "values"))  # Debugging print
+      
+      if (length(price_seq) < 2) {
+        warning("[WARNING] Not enough unique price points in P_max for meaningful demand modeling.")
+      }
+      
+      print("Checking data before calling exp_decay_monotonic():")
+      print(head(df))  # ✅ Debugging print
+      print("Unique P_max values:")
+      print(unique(df$P_max))
+      print("Generated price_seq:")
+      print(price_seq)
+      
+      individual_quantity <- df %>%
+        rowwise() %>%
+        mutate(Q_predicted = list(exp_decay_monotonic(price_seq, Q0, P_epsilon, P_max, Q_max))) %>%
+        unnest(Q_predicted) %>%
+        mutate(price = rep(price_seq, times = nrow(df))) %>%
+        filter(price <= P_max)  # Enforce price cutoff at P_max
+      
+      print(nrow(individual_quantity))  # Should return (num respondents × 10)
+      
+      print(individual_quantity %>%
+              filter(price == 5) %>%
+              summarise(total_quantity = sum(Q_predicted, na.rm = TRUE))
+      )
+      
+      print(individual_quantity %>%
+              filter(price > P_max) %>%
+              summarise(total_quantity = sum(Q_predicted, na.rm = TRUE))
+      )
+      
+      market_quantity <- individual_quantity %>%
+        group_by(price) %>%
+        summarise(quantity = sum(Q_predicted, na.rm = TRUE), .groups = "drop") %>%
+        complete(price = price_seq, fill = list(total_quantity = 0))  %>% # Ensure missing prices are filled
+        mutate(quantity = round(quantity, 0))
+      
+      print(nrow(market_quantity))  # Should return 10
+      
+      print("Transformed Data Preview:")
+      print((market_quantity))  # ✅ Debugging print
+      
+      return(market_quantity)
+    })
+    
+    output$wtp_transformed <- renderDT({
+      req(wtpData())  # Ensure data exists before rendering
+      datatable(wtpData())
+    })
+    
+    
     # 🚀 Reactive: calculate and store the respondent count 🚀 ----------------
     
     respondentCount <- reactive({
@@ -710,68 +897,39 @@ transformData <- function(data, selected_col, transformation_type) {
       active_tab <- input$tabset_data
       
       count <- switch(active_tab,
-                      "Durable Goods" = nrow(userData() %>% filter(!is.na(!!sym(input$wtpCol_durable)))),  # ✅ Simplified
-                      "Non-Durable (Prices)" = nrow(userData() %>% filter(!is.na(!!sym(input$start_price)))),
+                      "Durable Goods" = sum(durableData()$count, na.rm = TRUE),
+                      "Non-Durable (Prices)" = nrow(userData() %>% filter(!is.na(input$start_price))),
                       "Non-Durable (WTP)" = nrow(userData() %>% filter(!is.na(!!sym(input$wtpCol_nondurable)))),
                       NULL)
       
       return(count)
     })
     
+    # 🚀 Reactive: select transformed data from the correct scenario 🚀 -------
+    
+    # 🔄 Reactive: Select transformed data from the correct scenario
     transformedData <- reactive({
-      req(input$file1, input$tabset_data, userData())  # Ensure data is uploaded and dataset exists
+      req(input$file1, input$tabset_data)  # Ensure data is uploaded and a tab is selected
       
       active_tab <- input$tabset_data  # Track selected tab
-      cat("[DEBUG] Active Tab:", active_tab, "\n")
       
-      selected_cols <- NULL  # Initialize column variable
+      # Select appropriate transformed dataset
+      data <- switch(active_tab,
+                     "Durable Goods" = durableData(),
+                     "Non-Durable (Prices)" = priceData(),
+                     "Non-Durable (WTP)" = wtpData(),
+                     NULL)
       
-      # 🚨 **Prevent Execution If Required Inputs Are Missing**
-      if (active_tab == "Durable Goods") {
-        if (!isTruthy(input$wtpCol_durable)) {
-          cat("[DEBUG] No durable WTP column selected yet\n")
-          return(NULL)  # ✅ Prevent execution
-        }
-        selected_cols <- input$wtpCol_durable
-        
-      } else if (active_tab == "Non-Durable (Prices)") {
-        if (!isTruthy(input$start_price) || !isTruthy(input$end_price)) {
-          cat("[DEBUG] No start/end price columns selected yet\n")
-          return(NULL)  # ✅ Prevent execution
-        }
-        selected_cols <- c(input$start_price, input$end_price)
-        
-      } else if (active_tab == "Non-Durable (WTP)") {
-        if (!isTruthy(input$wtpCol_nondurable) ||
-            !isTruthy(input$quantityCol) ||
-            !isTruthy(input$quantityFractionCol)) {
-          cat("[DEBUG] Waiting for all Non-Durable WTP selections...\n")
-          return(NULL)  # ✅ Prevent execution
-        }
-        selected_cols <- c(input$wtpCol_nondurable, input$quantityCol, input$quantityFractionCol)
+      # Debugging check
+      if (is.null(data) || nrow(data) == 0) {
+        cat("[WARNING] Transformed Data is NULL or Empty\n")  # Debug print
+        return(tibble(price = numeric(0), quantity = numeric(0))) # ✅ Fallback to empty tibble
+      } else {
+        print(head(data))  # Show first few rows in console
       }
       
-      # 🚀 **Final Validation: Prevent `transformData()` from Running Prematurely**
-      if (is.null(selected_cols) || any(selected_cols == "")) {
-        cat("[DEBUG] No valid columns selected for", active_tab, "\n")
-        return(NULL)  # ✅ Prevent function from running
-      }
-      
-      cat("[DEBUG] Selected Columns:", paste(selected_cols, collapse = ", "), "\n")
-      
-      # 🚀 **Only Call transformData() When All Required Inputs Are Selected**
-      tryCatch({
-        transformData(userData(), selected_cols, active_tab)
-      }, error = function(e) {
-        cat("[ERROR] transformData() failed:", e$message, "\n")
-        return(NULL)  # ✅ Prevent crash
-      })
+      return(data)
     })
-    
-    
-    
-    
-    
     
     
     
@@ -791,22 +949,7 @@ transformData <- function(data, selected_col, transformation_type) {
       }
       
       lin_model <- tryCatch(lm(quantity ~ price, data = tb), error = function(e) NULL)
-
-            # exp_model <- tryCatch(lm(log(quantity) ~ price, data = tb), error = function(e) NULL)
-      exp_model <- tryCatch(
-        {
-          tb_filtered <- tb %>% filter(quantity > 0)  # Ensure no zero quantities
-          if (nrow(tb_filtered) > 2) {  # Ensure enough data points
-            lm(log(quantity) ~ price, data = tb_filtered)  
-            } else {
-              NULL  # Not enough data to fit model
-              }
-          },
-        error = function(e) {
-          cat("[WARNING] Exponential model fitting failed:", e$message, "\n")
-          NULL
-          }
-        )
+      exp_model <- tryCatch(lm(log(quantity) ~ price, data = tb), error = function(e) NULL)
       
       sig_model <- tryCatch(
         nls(quantity ~ SSlogis(price, Asym, xmid, scal), data = tb),
@@ -1542,7 +1685,7 @@ transformData <- function(data, selected_col, transformation_type) {
         
         annotate("point", x = optimal_price, y = optimal_profit, color = "black", shape = 21, fill = "white", size = 4) +
         
-        annotate("label", x = max_price * 1.0, y = max_revenue,
+        annotate("text", x = max_price * 1.0, y = max_revenue,
                  label = paste(
                    "P* = ", scales::dollar_format(accuracy = 0.01)(optimal_price),
                    "\nπ* = ", scales::dollar_format(accuracy = 0.01)(optimal_profit),
@@ -1550,12 +1693,9 @@ transformData <- function(data, selected_col, transformation_type) {
                    "\nR = ", scales::dollar_format(accuracy = 0.01)(optimal_revenue),
                    "\nC = ", scales::dollar_format(accuracy = 0.01)(optimal_cost)
                  ),
-                 hjust = 1, vjust = 1, size = 5, color = "black",
-                 fill = "white",
-                 alpha = 0.8,
-                 label.size = 0.3) +
+                 hjust = 1, vjust = 1, size = 5, color = "black") +
         
-        annotate("label", x = max_price * 0.75, y = max_revenue,
+        annotate("text", x = max_price * 0.75, y = max_revenue,
                  label = paste(
                    "set P = ", scales::dollar_format(accuracy = 0.01)(input$price_profit),
                    "\nπ = ", scales::dollar_format(accuracy = 0.01)(pi_calc_profit),
@@ -1563,10 +1703,7 @@ transformData <- function(data, selected_col, transformation_type) {
                    "\nR = ", scales::dollar_format(accuracy = 0.01)(pi_calc_revenue),
                    "\nC = ", scales::dollar_format(accuracy = 0.01)(pi_calc_cost)
                  ),
-                 hjust = 1, vjust = 1, size = 5, color = "black",
-                 fill = "white",
-                 alpha = 0.8,
-                 label.size = 0.3) +
+                 hjust = 1, vjust = 1, size = 5, color = "black") +
         
         # Reference lines and point at selected price
         annotate("segment", x = input$price_profit, xend = input$price_profit, y = 0, yend = pi_calc_revenue,

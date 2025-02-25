@@ -1,4 +1,4 @@
-﻿Gym_preference,Gym_member,Gym_freq,Workout_length,Gym_drink_brands,Drink_preferred,Coke_rank,Pepsi_rank,Other_rank,wtp,quantity,WTP_half,quantity_at_fraction,Gender,Age,Income,Protein_imnport,Protein_intake
+﻿Gym_preference,Gym_member,Gym_freq,Workout_length,Gym_drink_brands,Drink_preferred,Coke_rank,Pepsi_rank,Other_rank,wtp,quantity,WTP_half,quantity_at_P0,Gender,Age,Income,Protein_imnport,Protein_intake
 Both,Yes,Once a week,60min - 90min,Water fountain + juices,Non-carbonated,2,3,1,0,0,0,0,Male,25 - 34 years old,"Less than $25,000",Slightly below average,56 grams a day (normal for the average man)
 Gym,Yes,Once a week,30min - 60min,Coke + Pepsi,Coke,1,2,3,2.5,4,1.25,8,Female,25 - 34 years old,"Less than $25,000",Average,
 Gym,Yes,Once a week,60min - 90min,Coke + Pepsi,Coke,,,,2.5,4,1.25,8,Female,25 - 34 years old,"$75,000 - $99,999",Average,
