@@ -1,4 +1,5 @@
 library(shiny)
+library(shinyWidgets)
 library(DT)
 
 ui <- fluidPage(
@@ -34,6 +35,7 @@ ui <- fluidPage(
     tabPanel("Upload & Preview Data",
              sidebarLayout(
                sidebarPanel(
+                 # Traditional file input (unchanged)
                  fileInput("file1", "Upload CSV Data", accept = ".csv"),
                  checkboxInput("header", "Header", TRUE),
                  radioButtons("sep", "Separator", 
@@ -55,19 +57,24 @@ ui <- fluidPage(
     tabPanel("Transform Data",
              sidebarLayout(
                sidebarPanel(
-                 # For durable goods: simple willingness-to-pay inputs for two products
+                 # Use pickerInput for column selection to manage long names
                  conditionalPanel(
                    condition = "input.product_type == 'Durable Goods'",
-                   selectInput("wtpCol_product1", "Select WTP Column for Product 1", choices = NULL),
-                   selectInput("wtpCol_product2", "Select WTP Column for Product 2", choices = NULL)
+                   pickerInput("wtpCol_product1", "Select WTP Column for Product 1", choices = NULL,
+                               options = list(`live-search` = TRUE)),
+                   pickerInput("wtpCol_product2", "Select WTP Column for Product 2", choices = NULL,
+                               options = list(`live-search` = TRUE)),
+                   pickerInput("quantityCol_durable", "Select Quantity Column", choices = NULL,
+                               options = list(`live-search` = TRUE))
                  ),
-                 # For non-durable goods: price pair inputs (advanced approach)
                  conditionalPanel(
                    condition = "input.product_type == 'Non-Durable Goods'",
-                   selectInput("pricePair1", "Select Price Column for Price Pair 1", choices = NULL),
-                   selectInput("quantityPair1", "Select Quantity Column for Price Pair 1", choices = NULL),
-                   selectInput("pricePair2", "Select Price Column for Price Pair 2", choices = NULL),
-                   selectInput("quantityPair2", "Select Quantity Column for Price Pair 2", choices = NULL)
+                   pickerInput("pricePair", "Select Price Column", choices = NULL,
+                               options = list(`live-search` = TRUE)),
+                   pickerInput("quantityPair", "Select Quantity Column", choices = NULL,
+                               options = list(`live-search` = TRUE)),
+                   pickerInput("wtpCol_nondurable", "Select WTP Column", choices = NULL,
+                               options = list(`live-search` = TRUE))
                  )
                ),
                mainPanel(
@@ -89,12 +96,14 @@ ui <- fluidPage(
     tabPanel("Demand Estimation",
              sidebarLayout(
                sidebarPanel(
-                 selectInput("demand_model", "Select Demand Model",
-                             choices = c("Linear", "Exponential")),
-                 # Price sliders for each firm
-                 sliderInput("firm1_price", "Firm 1 Price", min = 0, max = 100, value = 10, step = 1),
-                 sliderInput("firm2_price", "Firm 2 Price", min = 0, max = 100, value = 10, step = 1),
-                 # Market size for each firm
+                 # Allow separate selection of demand model for each firm
+                 selectInput("demand_model_firm1", "Select Demand Model for Firm 1",
+                             choices = c("Linear", "Exponential"), selected = "Linear"),
+                 selectInput("demand_model_firm2", "Select Demand Model for Firm 2",
+                             choices = c("Linear", "Exponential"), selected = "Linear"),
+                 # Numeric inputs for precise price values
+                 numericInput("firm1_price", "Firm 1 Price", value = 10, min = 0, step = 0.1),
+                 numericInput("firm2_price", "Firm 2 Price", value = 10, min = 0, step = 0.1),
                  numericInput("market_size_firm1", "Market Size for Firm 1", value = 10000, min = 1, step = 100),
                  numericInput("market_size_firm2", "Market Size for Firm 2", value = 10000, min = 1, step = 100)
                ),
@@ -126,7 +135,10 @@ ui <- fluidPage(
                  numericInput("variable_cost_firm1", "Variable Cost per Unit (Firm 1)", value = 10, min = 0, step = 0.01),
                  h4("Firm 2 Cost Inputs"),
                  numericInput("fixed_cost_firm2", "Fixed Cost (Firm 2)", value = 1000, min = 0, step = 1),
-                 numericInput("variable_cost_firm2", "Variable Cost per Unit (Firm 2)", value = 10, min = 0, step = 0.01)
+                 numericInput("variable_cost_firm2", "Variable Cost per Unit (Firm 2)", value = 10, min = 0, step = 0.01),
+                 h4("Profit Analysis Price Inputs"),
+                 numericInput("profit_price_firm1", "Firm 1 Price for Profit Analysis", value = 10, min = 0, step = 0.1),
+                 numericInput("profit_price_firm2", "Firm 2 Price for Profit Analysis", value = 10, min = 0, step = 0.1)
                ),
                mainPanel(
                  h4("Profit Maximization & Reaction Functions"),
@@ -137,7 +149,5 @@ ui <- fluidPage(
     )
   )
 )
-
-# End of UI definition
 
 shinyApp(ui = ui, server = function(input, output, session) {})
